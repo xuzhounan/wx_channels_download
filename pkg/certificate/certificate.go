@@ -119,8 +119,7 @@ func fetchCertificates() ([]Certificate, error) {
 	switch os_env {
 	case "linux":
 		fmt.Println("Running on Linux")
-		return FetchCertificatesInLinux()
-	
+		return fetchCertificatesInLinux()
 	case "darwin":
 		return fetchCertificatesInMacOS()
 	case "windows":

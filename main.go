@@ -159,11 +159,14 @@ func root_command(args RootCommandArg) {
 	if globalAutoMode {
 		err := os.MkdirAll(globalDownloadDir, 0755)
 		if err != nil {
-			fmt.Printf("ERROR 创建下载目录失败: %v\n", err.Error())
+			fmt.Printf("❌ 创建下载目录失败: %v\n", err.Error())
 			fmt.Printf("按 Ctrl+C 退出...\n")
 			select {}
 		}
-		fmt.Printf("自动下载模式已开启，下载目录: %s\n", globalDownloadDir)
+		fmt.Printf("🚀 自动归档下载模式已开启\n")
+		fmt.Printf("📁 下载目录: %s\n", globalDownloadDir)
+		fmt.Printf("📂 视频将按用户名自动归档\n")
+		fmt.Printf("⚡ 自动跳过重复文件\n")
 	}
 
 	signal_chan := make(chan os.Signal, 1)
@@ -183,25 +186,57 @@ func root_command(args RootCommandArg) {
 	// }()
 	go func() {
 		sig := <-signal_chan
-		fmt.Printf("\n正在关闭服务...%v\n\n", sig)
+		fmt.Printf("\n🛑 正在关闭服务...%v\n", sig)
+		
+		// 强制清理代理设置
 		switch os_env {
 		case "darwin":
-			proxy.DisableProxyInMacOS(proxy.ProxySettings{
-							Device:   args.Device,
-							Hostname: "127.0.0.1",
-							Port:     strconv.Itoa(args.Port),
-						})
+			fmt.Print("🔧 正在清理 macOS 系统代理...")
+			err := proxy.DisableProxyInMacOS(proxy.ProxySettings{
+				Device:   args.Device,
+				Hostname: "127.0.0.1",
+				Port:     strconv.Itoa(args.Port),
+			})
+			if err != nil {
+				fmt.Printf("❌ 失败: %v\n", err)
+				fmt.Println("⚠️  请手动清理系统代理设置:")
+				fmt.Println("   系统偏好设置 → 网络 → 高级 → 代理 → 关闭所有代理")
+			} else {
+				fmt.Println("✅ 完成")
+			}
 		case "linux":
+			fmt.Print("🔧 正在清理 Linux 系统代理...")
 			err := proxy.DisableProxyInLinux()
 			if err != nil {
-				fmt.Printf("⚠️ 关闭 Linux 系统代理失败: %v\n", err)
+				fmt.Printf("❌ 失败: %v\n", err)
+			} else {
+				fmt.Println("✅ 完成")
 			}
+		case "windows":
+			fmt.Println("🔧 Windows 使用进程代理，无需清理系统设置")
 		}
+		
+		fmt.Println("\n✅ 服务已安全关闭")
 		os.Exit(0)
 	}()
 	
 	fmt.Printf("\nv" + version)
 	fmt.Printf("\n问题反馈 https://github.com/ltaoo/wx_channels_download/issues\n")
+	
+	// 启动时检查并清理残留的代理设置
+	if os_env == "darwin" {
+		fmt.Print("🔍 检查系统代理设置...")
+		err := proxy.DisableProxyInMacOS(proxy.ProxySettings{
+			Device:   args.Device,
+			Hostname: "127.0.0.1",
+			Port:     strconv.Itoa(args.Port),
+		})
+		if err == nil {
+			fmt.Println("✅ 已清理")
+		} else {
+			fmt.Println("✅ 正常")
+		}
+	}
 	existing, err1 := certificate.CheckCertificate("SunnyNet")
 	if err1 != nil {
 		fmt.Printf("\nERROR %v\v", err1.Error())
@@ -277,8 +312,15 @@ func root_command(args RootCommandArg) {
         Sunny.ProcessAddName("WeChatAppEx")
     }
 	
-	color.Green(fmt.Sprintf("\n\n服务已正确启动，请打开需要下载的视频号页面进行下载"))
-	fmt.Println("\n\n服务正在运行，按 Ctrl+C 退出...")
+	if globalAutoMode {
+		color.Green("\n\n✅ 自动下载服务已启动！")
+		fmt.Println("📱 请打开微信视频号，浏览视频即可自动下载")
+		fmt.Println("🎯 完全自动，无需手动操作")
+		fmt.Println("\n⚠️  按 Ctrl+C 退出服务")
+	} else {
+		color.Green("\n\n✅ 服务已正确启动，请打开需要下载的视频号页面进行下载")
+		fmt.Println("\n\n服务正在运行，按 Ctrl+C 退出...")
+	}
 	select {}
 }
 
@@ -410,77 +452,200 @@ func decrypt_command(args DecryptCOmmandArgs) {
 	fmt.Printf("解密完成 %s", args.Filepath)
 }
 
+// 格式化字节大小
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
 func handleAutoDownload(req AutoDownloadRequest) {
 	if !globalAutoMode {
 		return
 	}
 	
+	// 构建用户目录
+	userDir := req.Nickname
+	if userDir == "" {
+		userDir = "未知用户"
+	}
+	userDir = util.SafeFilename(userDir)
+	
+	// 创建用户子目录
+	userPath := path.Join(globalDownloadDir, userDir)
+	err := os.MkdirAll(userPath, 0755)
+	if err != nil {
+		fmt.Printf("[自动下载] 创建用户目录失败: %v\n", err)
+		return
+	}
+	
+	// 生成文件名
 	filename := req.Filename
 	if filename == "" {
 		if req.Title != "" {
 			filename = req.Title
+		} else if req.VideoID != "" {
+			filename = req.VideoID
 		} else {
 			filename = strconv.Itoa(int(time.Now().Unix()))
 		}
 	}
-	
-	// 清理文件名中的非法字符
 	filename = util.SafeFilename(filename)
 	
-	fmt.Printf("\n[自动下载] 开始下载: %s\n", filename)
+	// 检查是否已存在（重复检测）
+	var targetFile string
+	switch req.Type {
+	case "picture":
+		targetFile = path.Join(userPath, filename+".zip")
+	default:
+		targetFile = path.Join(userPath, filename+".mp4")
+	}
+	
+	if _, err := os.Stat(targetFile); err == nil {
+		fmt.Printf("⏭️  文件已存在，跳过: %s/%s\n", userDir, filename)
+		return
+	}
+	
+	// 如果是视频，也检查基于VideoID的文件名
+	if req.Type == "media" && req.VideoID != "" && req.VideoID != filename {
+		videoIdFile := path.Join(userPath, util.SafeFilename(req.VideoID)+".mp4")
+		if _, err := os.Stat(videoIdFile); err == nil {
+			fmt.Printf("⏭️  视频已存在，跳过: %s/%s\n", userDir, util.SafeFilename(req.VideoID))
+			return
+		}
+	}
+	
+	fmt.Printf("\n🎬 用户: %s\n", req.Nickname)
+	fmt.Printf("📁 目录: %s\n", userDir)
 	
 	switch req.Type {
 	case "picture":
-		downloadPictureAuto(req, filename)
+		downloadPictureAutoWithPath(req, filename, userPath)
 	case "media":
 		if req.Key != 0 {
-			downloadEncryptedVideoAuto(req, filename)
+			fmt.Printf("🔐 加密视频，开始下载并解密: %s\n", filename)
+			downloadEncryptedVideoAutoWithPath(req, filename, userPath)
 		} else {
-			downloadVideoAuto(req, filename)
+			fmt.Printf("🎥 开始下载视频: %s\n", filename)
+			downloadVideoAutoWithPath(req, filename, userPath)
 		}
 	default:
-		fmt.Printf("[自动下载] 未知类型: %s\n", req.Type)
+		fmt.Printf("❓ 未知类型: %s\n", req.Type)
 	}
 }
 
-func downloadVideoAuto(req AutoDownloadRequest, filename string) {
+func downloadVideoAutoWithPath(req AutoDownloadRequest, filename, targetDir string) {
 	resp, err := http.Get(req.URL)
 	if err != nil {
-		fmt.Printf("[自动下载] 下载失败: %v\n", err.Error())
+		fmt.Printf("❌ 下载失败: %v\n", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	
-	filepath := path.Join(globalDownloadDir, filename+".mp4")
+	filepath := path.Join(targetDir, filename+".mp4")
 	file, err := os.Create(filepath)
 	if err != nil {
-		fmt.Printf("[自动下载] 创建文件失败: %v\n", err.Error())
+		fmt.Printf("❌ 创建文件失败: %v\n", err.Error())
 		return
 	}
 	defer file.Close()
 	
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		fmt.Printf("[自动下载] 写入文件失败: %v\n", err.Error())
-		return
+	// 获取文件大小
+	contentLength := resp.Header.Get("Content-Length")
+	var totalSize int64
+	if contentLength != "" {
+		totalSize, _ = strconv.ParseInt(contentLength, 10, 64)
 	}
 	
-	fmt.Printf("[自动下载] 下载完成: %s\n", filepath)
+	// 带进度的复制
+	var downloaded int64
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	
+	for {
+		n, err := resp.Body.Read(buffer)
+		if n > 0 {
+			_, writeErr := file.Write(buffer[:n])
+			if writeErr != nil {
+				fmt.Printf("❌ 写入失败: %v\n", writeErr.Error())
+				return
+			}
+			downloaded += int64(n)
+			
+			if totalSize > 0 {
+				percent := float64(downloaded) / float64(totalSize) * 100
+				fmt.Printf("\r📥 下载中: %.1f%% (%s/%s)", 
+					percent, 
+					formatBytes(downloaded), 
+					formatBytes(totalSize))
+			} else {
+				fmt.Printf("\r📥 已下载: %s", formatBytes(downloaded))
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("\n❌ 下载出错: %v\n", err.Error())
+			return
+		}
+	}
+	
+	fmt.Printf("\n✅ 下载完成: %s\n", filepath)
 }
 
-func downloadEncryptedVideoAuto(req AutoDownloadRequest, filename string) {
+func downloadEncryptedVideoAutoWithPath(req AutoDownloadRequest, filename, targetDir string) {
 	resp, err := http.Get(req.URL)
 	if err != nil {
-		fmt.Printf("[自动下载] 下载失败: %v\n", err.Error())
+		fmt.Printf("❌ 下载失败: %v\n", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("[自动下载] 读取数据失败: %v\n", err.Error())
-		return
+	// 获取文件大小
+	contentLength := resp.Header.Get("Content-Length")
+	var totalSize int64
+	if contentLength != "" {
+		totalSize, _ = strconv.ParseInt(contentLength, 10, 64)
 	}
+	
+	// 带进度的读取
+	var data []byte
+	var downloaded int64
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	
+	for {
+		n, err := resp.Body.Read(buffer)
+		if n > 0 {
+			data = append(data, buffer[:n]...)
+			downloaded += int64(n)
+			
+			if totalSize > 0 {
+				percent := float64(downloaded) / float64(totalSize) * 100
+				fmt.Printf("\r📥 下载中: %.1f%% (%s/%s)", 
+					percent, 
+					formatBytes(downloaded), 
+					formatBytes(totalSize))
+			} else {
+				fmt.Printf("\r📥 已下载: %s", formatBytes(downloaded))
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("\n❌ 下载出错: %v\n", err.Error())
+			return
+		}
+	}
+	
+	fmt.Print("\r🔓 正在解密...")
 	
 	// 解密
 	length := uint32(131072)
@@ -494,36 +659,37 @@ func downloadEncryptedVideoAuto(req AutoDownloadRequest, filename string) {
 	key := uint64(req.Key)
 	decrypt.DecryptData(data, length, key)
 	
-	filepath := path.Join(globalDownloadDir, filename+".mp4")
+	filepath := path.Join(targetDir, filename+".mp4")
 	err = os.WriteFile(filepath, data, 0644)
 	if err != nil {
-		fmt.Printf("[自动下载] 写入文件失败: %v\n", err.Error())
+		fmt.Printf("\n❌ 写入文件失败: %v\n", err.Error())
 		return
 	}
 	
-	fmt.Printf("[自动下载] 下载并解密完成: %s\n", filepath)
+	fmt.Printf("\r✅ 下载并解密完成: %s\n", filepath)
 }
 
-func downloadPictureAuto(req AutoDownloadRequest, filename string) {
-	// 这里简化处理，只下载第一张图片
+func downloadPictureAutoWithPath(req AutoDownloadRequest, filename, targetDir string) {
 	if len(req.Files) == 0 {
-		fmt.Printf("[自动下载] 没有图片文件\n")
+		fmt.Printf("❌ 没有图片文件\n")
 		return
 	}
+	
+	fmt.Printf("📸 开始下载 %d 张图片\n", len(req.Files))
 	
 	for i, file := range req.Files {
 		url := file["url"].(string)
 		resp, err := http.Get(url)
 		if err != nil {
-			fmt.Printf("[自动下载] 下载图片失败: %v\n", err.Error())
+			fmt.Printf("❌ 图片 %d/%d 下载失败: %v\n", i+1, len(req.Files), err.Error())
 			continue
 		}
 		defer resp.Body.Close()
 		
-		filepath := path.Join(globalDownloadDir, fmt.Sprintf("%s_%d.jpg", filename, i+1))
+		filepath := path.Join(targetDir, fmt.Sprintf("%s_%d.jpg", filename, i+1))
 		outFile, err := os.Create(filepath)
 		if err != nil {
-			fmt.Printf("[自动下载] 创建图片文件失败: %v\n", err.Error())
+			fmt.Printf("❌ 图片 %d/%d 创建文件失败: %v\n", i+1, len(req.Files), err.Error())
 			resp.Body.Close()
 			continue
 		}
@@ -533,11 +699,11 @@ func downloadPictureAuto(req AutoDownloadRequest, filename string) {
 		resp.Body.Close()
 		
 		if err != nil {
-			fmt.Printf("[自动下载] 写入图片失败: %v\n", err.Error())
+			fmt.Printf("❌ 图片 %d/%d 写入失败: %v\n", i+1, len(req.Files), err.Error())
 			continue
 		}
 		
-		fmt.Printf("[自动下载] 图片下载完成: %s\n", filepath)
+		fmt.Printf("✅ 图片 %d/%d 下载完成\n", i+1, len(req.Files))
 	}
 }
 
@@ -558,6 +724,9 @@ type AutoDownloadRequest struct {
 	Title      string `json:"title"`
 	CoverURL   string `json:"coverUrl"`
 	Files      []map[string]interface{} `json:"files"`
+	Username   string `json:"username"`
+	Nickname   string `json:"nickname"`
+	VideoID    string `json:"videoId"`
 }
 
 func HttpCallback(Conn SunnyNet.ConnHTTP) {
@@ -586,16 +755,13 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 			return
 		}
 		if path == "/__wx_channels_api/profile" {
-			fmt.Println("[DEBUG] 收到视频profile信息")
 			request_body := Conn.GetRequestBody()
-			fmt.Printf("[DEBUG] Profile请求体: %s\n", string(request_body))
 			
 			// 如果开启自动模式，直接触发下载
 			if globalAutoMode {
 				var profileData map[string]interface{}
 				err := json.Unmarshal(request_body, &profileData)
 				if err == nil {
-					fmt.Printf("[DEBUG] 自动模式开启，准备下载视频: %v\n", profileData["title"])
 					
 					// 构造自动下载请求
 					autoReq := AutoDownloadRequest{
@@ -603,13 +769,12 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 						Type:  fmt.Sprintf("%v", profileData["type"]),
 					}
 					
-					// 提取其他字段
+					// 提取基本字段
 					if url, ok := profileData["url"]; ok {
 						autoReq.URL = fmt.Sprintf("%v", url)
 					}
 					if key, ok := profileData["key"]; ok {
 						if keyStr, ok := key.(string); ok {
-							// key是字符串，需要转换为整数
 							if keyInt, err := strconv.ParseInt(keyStr, 10, 64); err == nil {
 								autoReq.Key = int(keyInt)
 							}
@@ -619,6 +784,39 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 					}
 					if coverUrl, ok := profileData["coverUrl"]; ok {
 						autoReq.CoverURL = fmt.Sprintf("%v", coverUrl)
+					}
+					if id, ok := profileData["id"]; ok {
+						autoReq.VideoID = fmt.Sprintf("%v", id)
+					}
+					if nickname, ok := profileData["nickname"]; ok {
+						autoReq.Nickname = fmt.Sprintf("%v", nickname)
+					}
+					
+					// 提取用户名（从contact中获取）
+					if contact, ok := profileData["contact"]; ok {
+						if contactMap, ok := contact.(map[string]interface{}); ok {
+							if username, ok := contactMap["username"]; ok {
+								autoReq.Username = fmt.Sprintf("%v", username)
+							}
+							// 如果没有nickname，从contact中获取
+							if autoReq.Nickname == "" {
+								if nickname, ok := contactMap["nickname"]; ok {
+									autoReq.Nickname = fmt.Sprintf("%v", nickname)
+								}
+							}
+						}
+					}
+					
+					// 提取files字段（用于图片内容）
+					if files, ok := profileData["files"]; ok {
+						if filesArray, ok := files.([]interface{}); ok {
+							autoReq.Files = make([]map[string]interface{}, len(filesArray))
+							for i, file := range filesArray {
+								if fileMap, ok := file.(map[string]interface{}); ok {
+									autoReq.Files[i] = fileMap
+								}
+							}
+						}
 					}
 					
 					// 异步触发下载
@@ -659,26 +857,21 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 			return
 		}
 		if path == "/__wx_channels_api/auto_download" {
-			fmt.Println("[DEBUG] 收到自动下载请求")
 			var data AutoDownloadRequest
 			request_body := Conn.GetRequestBody()
-			fmt.Printf("[DEBUG] 请求体: %s\n", string(request_body))
 			err := json.Unmarshal(request_body, &data)
 			if err != nil {
-				fmt.Println("解析自动下载请求失败:", err.Error())
 				headers := http.Header{}
 				headers.Set("Content-Type", "application/json")
 				Conn.StopRequest(400, `{"error":"解析请求失败"}`, headers)
 				return
 			}
 			
-			fmt.Printf("[DEBUG] 解析成功，开始处理自动下载: %+v\n", data)
 			// 处理自动下载
 			go handleAutoDownload(data)
 			
 			headers := http.Header{}
 			headers.Set("Content-Type", "application/json")
-			headers.Set("__debug", "auto_download")
 			Conn.StopRequest(200, `{"success":true}`, headers)
 			return
 		}
@@ -769,21 +962,17 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 						(function() {
 							if (window.__wx_channels_store__) {
 								window.__wx_channels_store__.autoMode = true;
-								window.__wx_log({msg: "[DEBUG] 自动模式已开启"});
 							} else {
 								setTimeout(function() {
 									if (window.__wx_channels_store__) {
 										window.__wx_channels_store__.autoMode = true;
-										window.__wx_log({msg: "[DEBUG] 延迟设置自动模式已开启"});
 									}
 								}, 100);
 							}
 						})();
 						</script>`)
-						fmt.Println("[DEBUG] 后端自动模式已开启，注入自动模式脚本")
 					}
 					html = strings.Replace(html, "<head>", "<head>\n"+script+autoModeScript+script2, 1)
-					fmt.Println("1. 视频详情页 html 注入 js 成功")
 					Conn.SetResponseBodyIO(io.NopCloser(bytes.NewBuffer([]byte(html))))
 					return
 				}

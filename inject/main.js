@@ -55,13 +55,7 @@ function __wx_log(msg) {
 }
 
 function __wx_auto_download(profile) {
-  __wx_log({
-    msg: `[DEBUG] 自动下载检查 autoMode=${__wx_channels_store__.autoMode} title=${profile.title || 'unknown'}`
-  });
   if (!__wx_channels_store__.autoMode) {
-    __wx_log({
-      msg: `[DEBUG] 自动模式未开启`
-    });
     return;
   }
   
@@ -463,12 +457,14 @@ var __wx_channels_store__ = {
   autoMode: false,
 };
 
-// 初始化完成后发送日志到后端
-setTimeout(function() {
-  __wx_log({
-    msg: `[DEBUG] wx_channels_store 初始化完成 autoMode=${__wx_channels_store__.autoMode}`
-  });
-}, 1000);
+// 初始化完成
+if (__wx_channels_store__.autoMode) {
+  setTimeout(function() {
+    __wx_log({
+      msg: "自动下载模式已启用"
+    });
+  }, 1000);
+}
 var $icon = document.createElement("div");
 $icon.innerHTML =
   '<div data-v-6548f11a data-v-132dee25 class="click-box op-item item-gap-combine" role="button" aria-label="下载" style="padding: 4px 4px 4px 4px; --border-radius: 4px; --left: 0; --top: 0; --right: 0; --bottom: 0;"><svg data-v-132dee25 class="svg-icon icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="28" height="28"><path d="M213.333333 853.333333h597.333334v-85.333333H213.333333m597.333334-384h-170.666667V128H384v256H213.333333l298.666667 298.666667 298.666667-298.666667z"></path></svg></div>';

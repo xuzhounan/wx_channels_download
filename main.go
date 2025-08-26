@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"wx_channel/pkg/certificate"
+	"wx_channel/pkg/csv"
 	"wx_channel/pkg/decrypt"
 	"wx_channel/pkg/proxy"
 	"wx_channel/pkg/util"
@@ -47,6 +48,7 @@ var DefaultPort = 2023
 var uninstallFlag bool
 var globalDownloadDir string
 var globalAutoMode bool
+var globalCSVManager *csv.CSVManager
 func main() {
 	cobra.MousetrapHelpText = ""
 	var (
@@ -124,8 +126,32 @@ func main() {
 	decrypt_cmd.Flags().IntVar(&video_decrypt_key2, "key", 0, "解密密钥（必需）")
 	decrypt_cmd.MarkFlagRequired("filepath")
 
+	var statsDir string
+	stats_cmd := &cobra.Command{
+		Use:   "stats",
+		Short: "查看下载统计",
+		Long:  "查看视频下载的统计信息",
+		Run: func(cmd *cobra.Command, args []string) {
+			if statsDir == "" {
+				homedir, err := os.UserHomeDir()
+				if err != nil {
+					fmt.Printf("获取用户目录失败: %v\n", err)
+					return
+				}
+				statsDir = path.Join(homedir, "Downloads", "微信视频号")
+			}
+			
+			csvManager := csv.NewCSVManager(statsDir)
+			if err := csvManager.PrintStats(); err != nil {
+				fmt.Printf("查看统计失败: %v\n", err)
+			}
+		},
+	}
+	stats_cmd.Flags().StringVar(&statsDir, "dir", "", "下载目录 (默认: ~/Downloads/微信视频号)")
+
 	root_cmd.AddCommand(download_cmd)
 	root_cmd.AddCommand(decrypt_cmd)
+	root_cmd.AddCommand(stats_cmd)
 	if err := root_cmd.Execute(); err != nil {
 		fmt.Printf("初始化失败 %v", err.Error())
 		fmt.Printf("按 Ctrl+C 退出...\n")
@@ -167,6 +193,12 @@ func root_command(args RootCommandArg) {
 		fmt.Printf("📁 下载目录: %s\n", globalDownloadDir)
 		fmt.Printf("📂 视频将按用户名自动归档\n")
 		fmt.Printf("⚡ 自动跳过重复文件\n")
+	}
+	
+	// 初始化CSV管理器（在目录确定后）
+	if globalDownloadDir != "" {
+		globalCSVManager = csv.NewCSVManager(globalDownloadDir)
+		fmt.Printf("📊 CSV记录功能已启用\n")
 	}
 
 	signal_chan := make(chan os.Signal, 1)
@@ -466,10 +498,142 @@ func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+// saveVideoDataBeforeDownload 在下载前保存视频基本信息和互动数据
+func saveVideoDataBeforeDownload(req AutoDownloadRequest) {
+	if globalCSVManager == nil {
+		return
+	}
+	
+	// 确保VideoID存在
+	videoID := req.VideoID
+	if videoID == "" {
+		videoID = req.Title
+		if videoID == "" {
+			videoID = req.Filename
+		}
+	}
+	if videoID == "" {
+		return // 无法识别视频，跳过记录
+	}
+	
+	// 检查是否已有记录
+	existingRecord, _ := globalCSVManager.GetRecord(videoID)
+	
+	if existingRecord != nil {
+		// 更新互动数据和基本信息
+		existingRecord.Title = req.Title
+		existingRecord.Username = req.Username
+		existingRecord.Nickname = req.Nickname
+		existingRecord.VideoURL = req.URL
+		existingRecord.CoverURL = req.CoverURL
+		existingRecord.Duration = req.Duration
+		existingRecord.Type = req.Type
+		existingRecord.IsEncrypted = req.Key != 0
+		existingRecord.DecryptKey = req.Key
+		
+		// 更新互动数据（如果有）
+		if req.InteractionData != nil {
+			existingRecord.Likes = req.InteractionData.Likes
+			existingRecord.Shares = req.InteractionData.Shares
+			existingRecord.Favorites = req.InteractionData.Favorites
+			existingRecord.Comments = req.InteractionData.Comments
+		}
+		
+		fmt.Printf("📊 更新视频数据: %s - %s | 👍%d 🔄%d ⭐%d 💬%d\n", 
+			req.Nickname, req.Title,
+			existingRecord.Likes, existingRecord.Shares, 
+			existingRecord.Favorites, existingRecord.Comments)
+		
+		if err := globalCSVManager.AddOrUpdateRecord(existingRecord); err != nil {
+			fmt.Printf("⚠️  更新CSV失败: %v\n", err)
+		}
+	} else {
+		// 创建新记录
+		record := &csv.VideoRecord{
+			VideoID:      videoID,
+			Title:        req.Title,
+			Filename:     req.Filename,
+			Username:     req.Username,
+			Nickname:     req.Nickname,
+			VideoURL:     req.URL,
+			CoverURL:     req.CoverURL,
+			Duration:     req.Duration,
+			FileSize:     0, // 下载前暂时为0
+			Type:         req.Type,
+			IsEncrypted:  req.Key != 0,
+			DecryptKey:   req.Key,
+			DownloadTime: time.Now(),
+			FilePath:     "", // 下载前暂时为空
+		}
+		
+		// 添加互动数据（如果有）
+		if req.InteractionData != nil {
+			record.Likes = req.InteractionData.Likes
+			record.Shares = req.InteractionData.Shares
+			record.Favorites = req.InteractionData.Favorites
+			record.Comments = req.InteractionData.Comments
+		}
+		
+		fmt.Printf("📊 保存视频数据: %s - %s | 👍%d 🔄%d ⭐%d 💬%d\n", 
+			req.Nickname, req.Title,
+			record.Likes, record.Shares, record.Favorites, record.Comments)
+		
+		if err := globalCSVManager.AddOrUpdateRecord(record); err != nil {
+			fmt.Printf("⚠️  保存CSV失败: %v\n", err)
+		} else {
+			fmt.Printf("✅ 视频数据已保存: %s\n", videoID)
+		}
+	}
+}
+
+// updateVideoFileInfo 更新下载完成后的文件信息到CSV
+func updateVideoFileInfo(req AutoDownloadRequest, filePath string, fileSize int64) {
+	if globalCSVManager == nil {
+		return
+	}
+	
+	// 确保VideoID存在
+	videoID := req.VideoID
+	if videoID == "" {
+		videoID = req.Title
+		if videoID == "" {
+			videoID = req.Filename
+		}
+	}
+	if videoID == "" {
+		return // 无法识别视频，跳过记录
+	}
+	
+	// 获取现有记录并更新文件信息
+	existingRecord, err := globalCSVManager.GetRecord(videoID)
+	if err != nil {
+		fmt.Printf("⚠️  获取视频记录失败: %v\n", err)
+		return
+	}
+	
+	// 更新文件相关信息
+	existingRecord.FilePath = filePath
+	existingRecord.FileSize = fileSize
+	existingRecord.DownloadTime = time.Now() // 更新下载完成时间
+	
+	fmt.Printf("📁 更新文件信息: %.1fMB -> %s\n", 
+		float64(fileSize)/(1024*1024), filePath)
+	
+	// 更新CSV记录
+	if err := globalCSVManager.AddOrUpdateRecord(existingRecord); err != nil {
+		fmt.Printf("⚠️  更新文件信息失败: %v\n", err)
+	} else {
+		fmt.Printf("✅ 文件信息已更新: %s\n", videoID)
+	}
+}
+
 func handleAutoDownload(req AutoDownloadRequest) {
 	if !globalAutoMode {
 		return
 	}
+	
+	// 在下载前保存视频数据和互动数据
+	saveVideoDataBeforeDownload(req)
 	
 	// 构建用户目录
 	userDir := req.Nickname
@@ -509,7 +673,7 @@ func handleAutoDownload(req AutoDownloadRequest) {
 	}
 	
 	if _, err := os.Stat(targetFile); err == nil {
-		fmt.Printf("⏭️  文件已存在，跳过: %s/%s\n", userDir, filename)
+		fmt.Printf("⏭️  文件已存在，跳过下载: %s/%s\n", userDir, filename)
 		return
 	}
 	
@@ -517,7 +681,7 @@ func handleAutoDownload(req AutoDownloadRequest) {
 	if req.Type == "media" && req.VideoID != "" && req.VideoID != filename {
 		videoIdFile := path.Join(userPath, util.SafeFilename(req.VideoID)+".mp4")
 		if _, err := os.Stat(videoIdFile); err == nil {
-			fmt.Printf("⏭️  视频已存在，跳过: %s/%s\n", userDir, util.SafeFilename(req.VideoID))
+			fmt.Printf("⏭️  视频已存在，跳过下载: %s/%s\n", userDir, util.SafeFilename(req.VideoID))
 			return
 		}
 	}
@@ -598,6 +762,11 @@ func downloadVideoAutoWithPath(req AutoDownloadRequest, filename, targetDir stri
 	}
 	
 	fmt.Printf("\n✅ 下载完成: %s\n", filepath)
+	
+	// 获取文件大小并记录到CSV
+	if fileInfo, err := os.Stat(filepath); err == nil {
+		updateVideoFileInfo(req, filepath, fileInfo.Size())
+	}
 }
 
 func downloadEncryptedVideoAutoWithPath(req AutoDownloadRequest, filename, targetDir string) {
@@ -667,6 +836,11 @@ func downloadEncryptedVideoAutoWithPath(req AutoDownloadRequest, filename, targe
 	}
 	
 	fmt.Printf("\r✅ 下载并解密完成: %s\n", filepath)
+	
+	// 获取文件大小并记录到CSV
+	if fileInfo, err := os.Stat(filepath); err == nil {
+		updateVideoFileInfo(req, filepath, fileInfo.Size())
+	}
 }
 
 func downloadPictureAutoWithPath(req AutoDownloadRequest, filename, targetDir string) {
@@ -705,6 +879,12 @@ func downloadPictureAutoWithPath(req AutoDownloadRequest, filename, targetDir st
 		
 		fmt.Printf("✅ 图片 %d/%d 下载完成\n", i+1, len(req.Files))
 	}
+	
+	// 图片下载完成后记录到CSV
+	zipPath := path.Join(targetDir, filename+".zip")
+	if fileInfo, err := os.Stat(zipPath); err == nil {
+		updateVideoFileInfo(req, zipPath, fileInfo.Size())
+	}
 }
 
 type ChannelProfile struct {
@@ -716,17 +896,27 @@ type FrontendTip struct {
 	Msg     string `json:"msg"`
 }
 
+type InteractionData struct {
+	Likes     int `json:"likes"`
+	Shares    int `json:"shares"`
+	Favorites int `json:"favorites"`
+	Comments  int `json:"comments"`
+}
+
 type AutoDownloadRequest struct {
-	URL        string `json:"url"`
-	Filename   string `json:"filename"`
-	Key        int    `json:"key"`
-	Type       string `json:"type"`
-	Title      string `json:"title"`
-	CoverURL   string `json:"coverUrl"`
-	Files      []map[string]interface{} `json:"files"`
-	Username   string `json:"username"`
-	Nickname   string `json:"nickname"`
-	VideoID    string `json:"videoId"`
+	URL             string                     `json:"url"`
+	Filename        string                     `json:"filename"`
+	Key             int                        `json:"key"`
+	Type            string                     `json:"type"`
+	Title           string                     `json:"title"`
+	CoverURL        string                     `json:"coverUrl"`
+	Files           []map[string]interface{}   `json:"files"`
+	Username        string                     `json:"username"`
+	Nickname        string                     `json:"nickname"`
+	VideoID         string                     `json:"videoId"`
+	InteractionData *InteractionData           `json:"interactionData"`
+	Duration        int                        `json:"duration"`
+	FileSize        int64                      `json:"fileSize"`
 }
 
 func HttpCallback(Conn SunnyNet.ConnHTTP) {
@@ -816,6 +1006,38 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 									autoReq.Files[i] = fileMap
 								}
 							}
+						}
+					}
+					
+					// 提取互动数据
+					if interactionData, ok := profileData["interactionData"]; ok {
+						if interactionMap, ok := interactionData.(map[string]interface{}); ok {
+							interaction := &InteractionData{}
+							if likes, ok := interactionMap["likes"].(float64); ok {
+								interaction.Likes = int(likes)
+							}
+							if shares, ok := interactionMap["shares"].(float64); ok {
+								interaction.Shares = int(shares)
+							}
+							if favorites, ok := interactionMap["favorites"].(float64); ok {
+								interaction.Favorites = int(favorites)
+							}
+							if comments, ok := interactionMap["comments"].(float64); ok {
+								interaction.Comments = int(comments)
+							}
+							autoReq.InteractionData = interaction
+						}
+					}
+					
+					// 提取duration和fileSize
+					if duration, ok := profileData["duration"]; ok {
+						if durationFloat, ok := duration.(float64); ok {
+							autoReq.Duration = int(durationFloat)
+						}
+					}
+					if fileSize, ok := profileData["size"]; ok {
+						if fileSizeFloat, ok := fileSize.(float64); ok {
+							autoReq.FileSize = int64(fileSizeFloat)
 						}
 					}
 					
@@ -1167,7 +1389,7 @@ if (window.__wx_channels_store__.autoMode) {
 							return f("div",{class:"context-item",role:"button",onClick:() => __wx_channels_handle_click_download__(sp)},sp.fileFormat);
 						});
 					}
-					})(),f("div",{class:"context-item",role:"button",onClick:()=>__wx_channels_handle_click_download__()},"原始视频"),f("div",{class:"context-item",role:"button",onClick:__wx_channels_download_cur__},"当前视频"),f("div",{class:"context-item",role:"button",onClick:__wx_channels_handle_print_download_command},"打印下载命令"),f("div",{class:"context-item",role:"button",onClick:()=>__wx_channels_handle_download_cover()},"下载封面"),f("div",{class:"context-item",role:"button",onClick:__wx_channels_handle_copy__},"复制页面链接")]`
+					})(),f("div",{class:"context-item",role:"button",onClick:()=>__wx_channels_handle_click_download__()},"原始视频"),f("div",{class:"context-item",role:"button",onClick:__wx_channels_download_cur__},"当前视频"),f("div",{class:"context-item",role:"button",onClick:__wx_channels_handle_print_download_command},"打印下载命令"),f("div",{class:"context-item",role:"button",onClick:()=>__wx_channels_handle_download_cover()},"下载封面"),f("div",{class:"context-item",role:"button",onClick:__wx_channels_handle_copy__},"复制页面链接"),f("div",{class:"context-item",role:"button",onClick:()=>__wx_manual_extract_interaction()},"📊 提取互动数据")]`
 					content = regex.ReplaceAllString(content, replaceStr)
 					Conn.SetResponseBodyIO(io.NopCloser(bytes.NewBuffer([]byte(content))))
 					return

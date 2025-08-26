@@ -258,16 +258,20 @@ func root_command(args RootCommandArg) {
 	// 启动时检查并清理残留的代理设置
 	if os_env == "darwin" {
 		fmt.Print("🔍 检查系统代理设置...")
-		err := proxy.DisableProxyInMacOS(proxy.ProxySettings{
-			Device:   args.Device,
-			Hostname: "127.0.0.1",
-			Port:     strconv.Itoa(args.Port),
-		})
-		if err == nil {
-			fmt.Println("✅ 已清理")
-		} else {
-			fmt.Println("✅ 正常")
+		// 清理所有可能的代理设置
+		devices := []string{"Wi-Fi", "Ethernet", ""}
+		for _, device := range devices {
+			proxy.DisableProxyInMacOS(proxy.ProxySettings{
+				Device:   device,
+				Hostname: "127.0.0.1", 
+				Port:     strconv.Itoa(args.Port),
+			})
 		}
+		fmt.Println("✅ 已清理")
+		
+		fmt.Println("⚠️  提醒：程序将设置系统级代理")
+		fmt.Println("   如需避免影响其他应用，请按 Ctrl+C 正常退出")
+		time.Sleep(2 * time.Second)
 	}
 	existing, err1 := certificate.CheckCertificate("SunnyNet")
 	if err1 != nil {
@@ -928,6 +932,28 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 	}
 	hostname := parsed_url.Hostname()
 	path := parsed_url.Path
+	
+	// 白名单：只处理微信相关域名
+	allowedDomains := []string{
+		"channels.weixin.qq.com",
+		"finder.video.qq.com", 
+		"wxsns.qq.com",
+		"mmbiz.qpic.cn",
+		"wx.qlogo.cn",
+	}
+	
+	isAllowed := false
+	for _, domain := range allowedDomains {
+		if strings.Contains(hostname, domain) {
+			isAllowed = true
+			break
+		}
+	}
+	
+	// 对于非微信域名，直接放行
+	if !isAllowed {
+		return
+	}
 	if Conn.Type() == public.HttpSendRequest {
 		Conn.GetRequestHeader().Del("Accept-Encoding")
 		if util.Includes(path, "jszip") {

@@ -462,11 +462,43 @@ var __wx_channels_store__ = {
   autoMode: false,
 };
 
-// 简化的互动数据提取
-function __wx_extract_interaction_data() {
-  const data = { likes: 0, shares: 0, favorites: 0, comments: 0 };
+// 数字单位转换函数
+function __wx_parse_number_with_unit(text) {
+  if (!text) return null;
   
-  // 基础互动数据提取逻辑
+  const cleanText = text.trim();
+  
+  // 纯数字
+  if (cleanText.match(/^\d+$/)) {
+    return parseInt(cleanText);
+  }
+  
+  // 带"万"的数字：1.3万 -> 13000
+  const wanMatch = cleanText.match(/^(\d+(?:\.\d+)?)\s*万$/);
+  if (wanMatch) {
+    return Math.round(parseFloat(wanMatch[1]) * 10000);
+  }
+  
+  // 带"k"或"K"的数字：1.3k -> 1300
+  const kMatch = cleanText.match(/^(\d+(?:\.\d+)?)\s*[kK]$/);
+  if (kMatch) {
+    return Math.round(parseFloat(kMatch[1]) * 1000);
+  }
+  
+  // 带"m"或"M"的数字：1.3m -> 1300000
+  const mMatch = cleanText.match(/^(\d+(?:\.\d+)?)\s*[mM]$/);
+  if (mMatch) {
+    return Math.round(parseFloat(mMatch[1]) * 1000000);
+  }
+  
+  return null;
+}
+
+// 修复的互动数据提取
+function __wx_extract_interaction_data() {
+  const data = { likes: null, shares: null, favorites: null, comments: null };
+  
+  // 查找页面底部的互动数字（支持单位）
   const foundNumbers = [];
   const walker = document.createTreeWalker(
     document.body,
@@ -474,43 +506,80 @@ function __wx_extract_interaction_data() {
     {
       acceptNode: function(node) {
         const text = node.textContent.trim();
-        return text.match(/^\d+$/) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        // 匹配纯数字或带单位的数字
+        return (text.match(/^\d+$/) || text.match(/^\d+(?:\.\d+)?\s*[万kmKM]$/)) ? 
+          NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     }
   );
   
   let node;
   while (node = walker.nextNode()) {
-    const value = parseInt(node.textContent.trim());
+    const text = node.textContent.trim();
+    const value = __wx_parse_number_with_unit(text);
     const parent = node.parentElement;
     
-    if (parent && parent.offsetHeight > 0 && parent.offsetWidth > 0) {
+    if (value !== null && parent && parent.offsetHeight > 0 && parent.offsetWidth > 0) {
       const position = parent.getBoundingClientRect();
       
-      if (position.top > window.innerHeight * 0.4 && 
-          value >= 10 && value < 1000000 && 
-          position.width < 200 && 
-          position.height < 100) {
+      // 放宽数值范围，包括0和小数值
+      if (position.top > window.innerHeight * 0.3 && 
+          value >= 0 && value < 100000000 && 
+          position.width < 300 && 
+          position.height < 150) {
         foundNumbers.push({
           value: value,
           element: parent,
           position: position,
-          text: node.textContent.trim()
+          text: text,
+          originalText: text
         });
       }
     }
   }
   
   if (foundNumbers.length >= 4) {
-    // 按Y坐标分组
+    // 按Y坐标分组，找到同一行的数字
     const rows = {};
     foundNumbers.forEach(num => {
-      const rowKey = Math.round(num.position.top / 20) * 20;
+      const rowKey = Math.round(num.position.top / 30) * 30; // 增大容差到30px
       if (!rows[rowKey]) rows[rowKey] = [];
       rows[rowKey].push(num);
     });
     
+    // 找到包含4个或更多数字的行
     const validRows = Object.values(rows).filter(row => row.length >= 4);
+    
+    if (validRows.length > 0) {
+      // 选择最底部的行（互动数据通常在底部）
+      const bottomRow = validRows.reduce((max, current) => 
+        current[0].position.top > max[0].position.top ? current : max
+      );
+      
+      // 按从左到右排序
+      bottomRow.sort((a, b) => a.position.left - b.position.left);
+      
+      if (bottomRow.length >= 4) {
+        data.likes = bottomRow[0].value;
+        data.shares = bottomRow[1].value;
+        data.favorites = bottomRow[2].value;  
+        data.comments = bottomRow[3].value;
+      }
+    }
+  }
+  
+  // 备用策略：如果主策略失败，尝试更宽松的匹配
+  const validData = Object.keys(data).filter(key => data[key] !== null && data[key] >= 0);
+  if (validData.length < 3 && foundNumbers.length >= 3) {
+    // 按Y坐标分组，但降低要求
+    const rows = {};
+    foundNumbers.forEach(num => {
+      const rowKey = Math.round(num.position.top / 50) * 50; // 更大容差
+      if (!rows[rowKey]) rows[rowKey] = [];
+      rows[rowKey].push(num);
+    });
+    
+    const validRows = Object.values(rows).filter(row => row.length >= 3); // 降低要求到3个数字
     
     if (validRows.length > 0) {
       const bottomRow = validRows.reduce((max, current) => 
@@ -519,11 +588,15 @@ function __wx_extract_interaction_data() {
       
       bottomRow.sort((a, b) => a.position.left - b.position.left);
       
-      if (bottomRow.length >= 4) {
+      // 根据实际数量分配
+      if (bottomRow.length >= 3) {
         data.likes = bottomRow[0].value;
         data.shares = bottomRow[1].value;
-        data.favorites = bottomRow[2].value;
-        data.comments = bottomRow[3].value;
+        data.comments = bottomRow[2].value;
+        if (bottomRow.length >= 4) {
+          data.favorites = bottomRow[2].value;
+          data.comments = bottomRow[3].value;
+        }
       }
     }
   }
@@ -536,20 +609,85 @@ function __wx_extract_interaction_data() {
 function __wx_manual_extract_interaction() {
   const data = __wx_extract_interaction_data();
   
-  const validData = Object.keys(data).filter(key => data[key] !== null && data[key] > 0);
+  const validData = Object.keys(data).filter(key => data[key] !== null && data[key] >= 0);
   if (validData.length > 0) {
-    const summary = validData.map(key => `${key}:${data[key]}`).join(', ');
+    // 根据图片显示的图标，调整输出格式
+    const icons = { likes: '👍', shares: '🔄', favorites: '⭐', comments: '💬' };
+    const summary = validData.map(key => `${icons[key]}${data[key]}`).join(' ');
     __wx_log({
       msg: `📊 ${summary}`
+    });
+  } else {
+    __wx_log({
+      msg: `📊 未找到互动数据`
     });
   }
   
   if (__wx_channels_store__.profile) {
     __wx_channels_store__.profile.interactionData = data;
+    
+    // 发送更新的profile数据到后端
+    fetch("/__wx_channels_api/profile", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        ...__wx_channels_store__.profile,
+        interactionData: data
+      })
+    });
   }
   
   return data;
 }
+
+// 自动提取互动数据的集成功能
+function __wx_auto_extract_interaction() {
+  // 延迟一点时间确保页面完全加载
+  setTimeout(() => {
+    if (__wx_channels_store__.profile && !__wx_channels_store__.profile.interactionData) {
+      const interactionData = __wx_extract_interaction_data();
+      const validData = Object.keys(interactionData).filter(key => interactionData[key] !== null && interactionData[key] >= 0);
+      
+      if (validData.length >= 2) {
+        __wx_channels_store__.profile.interactionData = interactionData;
+        
+        // 简洁的输出
+        const icons = { likes: '👍', shares: '🔄', favorites: '⭐', comments: '💬' };
+        const summary = validData.map(key => `${icons[key]}${interactionData[key]}`).join(' ');
+        __wx_log({
+          msg: `📊 ${summary}`
+        });
+        
+        // 发送到后端
+        fetch("/__wx_channels_api/profile", {
+          method: "POST", 
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            ...__wx_channels_store__.profile,
+            interactionData: interactionData
+          })
+        });
+      }
+    }
+  }, 1500);
+}
+
+// 监听profile变化，自动提取互动数据
+let lastVideoId = null;
+setInterval(() => {
+  if (__wx_channels_store__.profile) {
+    const currentVideoId = __wx_channels_store__.profile.id || __wx_channels_store__.profile.title;
+    
+    if (currentVideoId && currentVideoId !== lastVideoId) {
+      lastVideoId = currentVideoId;
+      __wx_auto_extract_interaction();
+    }
+  }
+}, 2000);
 var $icon = document.createElement("div");
 $icon.innerHTML =
   '<div data-v-6548f11a data-v-132dee25 class="click-box op-item item-gap-combine" role="button" aria-label="下载" style="padding: 4px 4px 4px 4px; --border-radius: 4px; --left: 0; --top: 0; --right: 0; --bottom: 0;"><svg data-v-132dee25 class="svg-icon icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="28" height="28"><path d="M213.333333 853.333333h597.333334v-85.333333H213.333333m597.333334-384h-170.666667V128H384v256H213.333333l298.666667 298.666667 298.666667-298.666667z"></path></svg></div>';

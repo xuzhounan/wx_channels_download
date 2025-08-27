@@ -49,6 +49,7 @@ var uninstallFlag bool
 var globalDownloadDir string
 var globalAutoMode bool
 var globalCSVManager *csv.CSVManager
+var processedVideos = make(map[string]bool) // 防止重复处理同一视频
 func main() {
 	cobra.MousetrapHelpText = ""
 	var (
@@ -631,9 +632,9 @@ func updateVideoFileInfo(req AutoDownloadRequest, filePath string, fileSize int6
 	}
 }
 
-func handleAutoDownload(req AutoDownloadRequest) {
+func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 	if !globalAutoMode {
-		return
+		return false, "auto mode not enabled"
 	}
 	
 	// 在下载前保存视频数据和互动数据
@@ -651,7 +652,7 @@ func handleAutoDownload(req AutoDownloadRequest) {
 	err := os.MkdirAll(userPath, 0755)
 	if err != nil {
 		fmt.Printf("[自动下载] 创建用户目录失败: %v\n", err)
-		return
+		return false, "failed to create user directory"
 	}
 	
 	// 生成文件名
@@ -678,7 +679,12 @@ func handleAutoDownload(req AutoDownloadRequest) {
 	
 	if _, err := os.Stat(targetFile); err == nil {
 		fmt.Printf("⏭️  文件已存在，跳过下载: %s/%s\n", userDir, filename)
-		return
+		
+		// 在auto模式下，即使跳过下载也要触发页面关闭逻辑
+		if globalAutoMode {
+			fmt.Printf("🚪 [自动模式] 文件已存在，任务完成\n")
+		}
+		return true, "file already exists, skipped"
 	}
 	
 	// 如果是视频，也检查基于VideoID的文件名
@@ -686,7 +692,12 @@ func handleAutoDownload(req AutoDownloadRequest) {
 		videoIdFile := path.Join(userPath, util.SafeFilename(req.VideoID)+".mp4")
 		if _, err := os.Stat(videoIdFile); err == nil {
 			fmt.Printf("⏭️  视频已存在，跳过下载: %s/%s\n", userDir, util.SafeFilename(req.VideoID))
-			return
+			
+			// 在auto模式下，即使跳过下载也要触发页面关闭逻辑
+			if globalAutoMode {
+				fmt.Printf("🚪 [自动模式] 文件已存在，任务完成\n")
+			}
+			return true, "file already exists, skipped"
 		}
 	}
 	
@@ -696,6 +707,7 @@ func handleAutoDownload(req AutoDownloadRequest) {
 	switch req.Type {
 	case "picture":
 		downloadPictureAutoWithPath(req, filename, userPath)
+		return true, "picture download completed"
 	case "media":
 		if req.Key != 0 {
 			fmt.Printf("🔐 加密视频，开始下载并解密: %s\n", filename)
@@ -704,8 +716,10 @@ func handleAutoDownload(req AutoDownloadRequest) {
 			fmt.Printf("🎥 开始下载视频: %s\n", filename)
 			downloadVideoAutoWithPath(req, filename, userPath)
 		}
+		return true, "video download completed"
 	default:
 		fmt.Printf("❓ 未知类型: %s\n", req.Type)
+		return false, "unknown type"
 	}
 }
 
@@ -979,6 +993,30 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 				err := json.Unmarshal(request_body, &profileData)
 				if err == nil {
 					
+					// 防止重复处理同一视频
+					videoID := ""
+					if id, ok := profileData["id"]; ok {
+						videoID = fmt.Sprintf("%v", id)
+					}
+					if videoID == "" {
+						if title, ok := profileData["title"]; ok {
+							videoID = fmt.Sprintf("%v", title)
+						}
+					}
+					
+					if videoID != "" && processedVideos[videoID] {
+						fmt.Printf("⏭️  视频已处理过，跳过: %s\n", videoID)
+						headers := http.Header{}
+						headers.Set("Content-Type", "application/json")
+						headers.Set("__debug", "fake_resp")
+						Conn.StopRequest(200, "{}", headers)
+						return
+					}
+					
+					if videoID != "" {
+						processedVideos[videoID] = true
+					}
+					
 					// 构造自动下载请求
 					autoReq := AutoDownloadRequest{
 						Title: fmt.Sprintf("%v", profileData["title"]),
@@ -1067,8 +1105,13 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 						}
 					}
 					
-					// 异步触发下载
-					go handleAutoDownload(autoReq)
+					// 异步触发下载，并处理页面关闭
+					go func() {
+						success, message := handleAutoDownload(autoReq)
+						if success {
+							fmt.Printf("🚪 [自动模式] 页面处理完成，需要关闭: %s\n", message)
+						}
+					}()
 				}
 			}
 			
@@ -1115,12 +1158,35 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 				return
 			}
 			
-			// 处理自动下载
-			go handleAutoDownload(data)
+			// 处理自动下载并获取结果
+			success, message := handleAutoDownload(data)
 			
 			headers := http.Header{}
-			headers.Set("Content-Type", "application/json")
-			Conn.StopRequest(200, `{"success":true}`, headers)
+			if success {
+				// 成功时返回JavaScript代码来关闭页面
+				headers.Set("Content-Type", "application/javascript")
+				
+				// 生成关闭页面的JavaScript代码
+				closeScript := fmt.Sprintf(`
+console.log("[自动模式] 任务完成：%s");
+setTimeout(function() {
+	console.log("[自动模式] 正在关闭页面...");
+	if (window.opener) {
+		window.close();
+	} else {
+		window.location.href = "about:blank";
+	}
+}, 2000);
+`, message)
+				
+				fmt.Printf("🚪 [自动模式] 页面将在2秒后关闭，任务完成: %s\n", message)
+				Conn.StopRequest(200, closeScript, headers)
+			} else {
+				// 失败时返回JSON响应，不关闭页面
+				headers.Set("Content-Type", "application/json")
+				response := fmt.Sprintf(`{"success":false,"message":"%s"}`, message)
+				Conn.StopRequest(200, response, headers)
+			}
 			return
 		}
 	}

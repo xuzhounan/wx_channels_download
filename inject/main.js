@@ -54,6 +54,7 @@ function __wx_log(msg) {
   });
 }
 
+
 function __wx_auto_download(profile) {
   if (!__wx_channels_store__.autoMode) {
     return;
@@ -90,16 +91,29 @@ function __wx_auto_download(profile) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(downloadData),
-  }).then(response => response.json())
+  }).then(response => response.text())
     .then(data => {
-      if (data.success) {
-        __wx_log({
-          msg: `[自动下载] ${filename}`,
-        });
+      // 后端可能返回JavaScript代码来执行
+      if (data.includes('window.close()') || data.includes('location.href')) {
+        eval(data);
       } else {
-        __wx_log({
-          msg: `[自动下载失败] ${filename}`,
-        });
+        // 如果不是脚本，尝试解析为JSON
+        try {
+          const jsonData = JSON.parse(data);
+          if (jsonData.success) {
+            __wx_log({
+              msg: `[自动下载] ${filename}`,
+            });
+          } else {
+            __wx_log({
+              msg: `[自动下载失败] ${filename}`,
+            });
+          }
+        } catch (e) {
+          __wx_log({
+            msg: `[自动下载] 响应处理完成`,
+          });
+        }
       }
     })
     .catch(err => {
@@ -644,7 +658,7 @@ function __wx_manual_extract_interaction() {
 
 // 自动提取互动数据的集成功能
 function __wx_auto_extract_interaction() {
-  // 延迟一点时间确保页面完全加载
+  // 延迟更长时间确保互动数据已经加载到DOM中
   setTimeout(() => {
     if (__wx_channels_store__.profile && !__wx_channels_store__.profile.interactionData) {
       const interactionData = __wx_extract_interaction_data();
@@ -671,6 +685,34 @@ function __wx_auto_extract_interaction() {
             interactionData: interactionData
           })
         });
+      } else {
+        // 如果还是没有足够的互动数据，再尝试一次
+        setTimeout(() => {
+          const retryData = __wx_extract_interaction_data();
+          const retryValid = Object.keys(retryData).filter(key => retryData[key] !== null && retryData[key] >= 0);
+          
+          if (retryValid.length >= 2) {
+            __wx_channels_store__.profile.interactionData = retryData;
+            
+            const icons = { likes: '👍', shares: '🔄', favorites: '⭐', comments: '💬' };
+            const summary = retryValid.map(key => `${icons[key]}${retryData[key]}`).join(' ');
+            __wx_log({
+              msg: `📊 ${summary}`
+            });
+            
+            // 发送到后端
+            fetch("/__wx_channels_api/profile", {
+              method: "POST", 
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                ...__wx_channels_store__.profile,
+                interactionData: retryData
+              })
+            });
+          }
+        }, 2000);
       }
     }
   }, 1500);
@@ -678,6 +720,8 @@ function __wx_auto_extract_interaction() {
 
 // 监听profile变化，自动提取互动数据
 let lastVideoId = null;
+let autoCloseTimer = null;
+
 setInterval(() => {
   if (__wx_channels_store__.profile) {
     const currentVideoId = __wx_channels_store__.profile.id || __wx_channels_store__.profile.title;
@@ -685,6 +729,81 @@ setInterval(() => {
     if (currentVideoId && currentVideoId !== lastVideoId) {
       lastVideoId = currentVideoId;
       __wx_auto_extract_interaction();
+      
+      // 在auto模式下，延迟关闭页面
+      if (__wx_channels_store__.autoMode) {
+        // 清除之前的定时器
+        if (autoCloseTimer) {
+          clearTimeout(autoCloseTimer);
+        }
+        
+        // 设置新的关闭定时器
+        autoCloseTimer = setTimeout(() => {
+          console.log("[自动模式] 任务完成，正在关闭页面...");
+          __wx_log({
+            msg: "[自动模式] 任务完成，正在关闭页面..."
+          });
+          
+          setTimeout(() => {
+            // 尝试多种方式关闭标签页
+            try {
+              // 方法1: 直接关闭窗口
+              window.close();
+              
+              // 如果无法关闭，尝试其他方法
+              setTimeout(() => {
+                // 方法2: 设置opener并关闭
+                window.opener = window;
+                window.close();
+                
+                // 方法3: 如果还是无法关闭，使用history.back()
+                setTimeout(() => {
+                  if (history.length > 1) {
+                    history.back();
+                  } else {
+                    // 最后手段：显示完成页面而不是空白页
+                    document.body.innerHTML = `
+                      <div style="
+                        display: flex; 
+                        flex-direction: column; 
+                        justify-content: center; 
+                        align-items: center; 
+                        height: 100vh; 
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        text-align: center;
+                      ">
+                        <h1 style="font-size: 48px; margin-bottom: 20px;">✅</h1>
+                        <h2 style="font-size: 24px; margin-bottom: 10px;">任务完成</h2>
+                        <p style="font-size: 16px; margin-bottom: 30px;">视频下载已完成，可以关闭此标签页</p>
+                        <button onclick="window.close()" style="
+                          padding: 12px 24px;
+                          font-size: 16px;
+                          background: rgba(255,255,255,0.2);
+                          border: 2px solid white;
+                          border-radius: 25px;
+                          color: white;
+                          cursor: pointer;
+                          transition: all 0.3s;
+                        " onmouseover="this.style.background='rgba(255,255,255,0.3)'" 
+                           onmouseout="this.style.background='rgba(255,255,255,0.2)'">
+                          关闭标签页
+                        </button>
+                      </div>
+                    `;
+                    document.title = "✅ 任务完成";
+                  }
+                }, 100);
+              }, 100);
+            } catch (e) {
+              console.log("关闭页面失败:", e);
+              // 如果都失败了，至少跳转到空白页
+              window.location.href = "about:blank";
+            }
+          }, 1000);
+        }, 5000); // 5秒后关闭页面，给下载一些时间
+      }
     }
   }
 }, 2000);

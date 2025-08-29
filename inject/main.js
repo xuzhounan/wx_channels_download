@@ -1,16 +1,48 @@
+// 脚本开始执行
+console.log("[WX_DEBUG] 脚本开始执行");
+
+// 立即用__wx_log输出调试信息
+try {
+  fetch("/__wx_channels_api/tip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ msg: "[WX_DEBUG] === 脚本开始执行 ===" })
+  });
+} catch(e) {
+  console.error("[WX_DEBUG] fetch失败:", e);
+}
+
+console.log("[WX_DEBUG] === 脚本开始执行 ===");
+
 const defaultRandomAlphabet =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+console.log("[WX_DEBUG] 常量定义完成");
+try {
+  fetch("/__wx_channels_api/tip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ msg: "[WX_DEBUG] 常量定义完成" })
+  });
+} catch(e) {}
+
+console.log("[WX_DEBUG] 定义__wx_uid__函数");
 function __wx_uid__() {
   return random_string(12);
 }
+console.log("[WX_DEBUG] __wx_uid__函数定义完成");
 /**
  * 返回一个指定长度的随机字符串
  * @param length
  * @returns
  */
+console.log("[WX_DEBUG] 定义random_string函数");
 function random_string(length) {
   return random_string_with_alphabet(length, defaultRandomAlphabet);
 }
+console.log("[WX_DEBUG] random_string函数定义完成");
+
+console.log("[WX_DEBUG] 定义random_string_with_alphabet函数");
 function random_string_with_alphabet(length, alphabet) {
   let b = new Array(length);
   let max = alphabet.length;
@@ -20,6 +52,9 @@ function random_string_with_alphabet(length, alphabet) {
   }
   return b.join("");
 }
+console.log("[WX_DEBUG] random_string_with_alphabet函数定义完成");
+
+console.log("[WX_DEBUG] 定义sleep函数");
 function sleep() {
   return new Promise((resolve) => {
     setTimeout(() => {
@@ -54,9 +89,30 @@ function __wx_log(msg) {
   });
 }
 
+// 提前定义全局存储对象
+var __wx_channels_tip__ = {};
+var __wx_channels_store__ = {
+  profile: null,
+  profiles: [],
+  keys: {},
+  buffers: [],
+  autoMode: false,
+};
+
+// 将store暴露到window对象，以便其他脚本可以访问
+window.__wx_channels_store__ = __wx_channels_store__;
+window.__wx_channels_tip__ = __wx_channels_tip__;
+
+__wx_log({ msg: "[FRONTEND] Store对象已暴露到window" });
+
+// 移除自定义的profile提取函数，恢复原有机制
 
 function __wx_auto_download(profile) {
+  console.log("[WX_DEBUG] __wx_auto_download调用，autoMode:", __wx_channels_store__.autoMode);
+  __wx_log({ msg: "[FRONTEND] __wx_auto_download函数开始执行" });
+  
   if (!__wx_channels_store__.autoMode) {
+    console.log("[WX_DEBUG] 自动模式未开启，跳过下载");
     return;
   }
   
@@ -85,17 +141,28 @@ function __wx_auto_download(profile) {
     interactionData: profile.interactionData || null
   };
   
+  __wx_log({ msg: "[FRONTEND] 准备发送auto_download请求" });
+  
   fetch("/__wx_channels_api/auto_download", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(downloadData),
-  }).then(response => response.text())
+  }).then(response => {
+    __wx_log({ msg: "[FRONTEND] auto_download响应收到" });
+    return response.text();
+  })
     .then(data => {
+      __wx_log({ msg: "[FRONTEND] auto_download响应数据: " + data.substring(0, 100) });
       // 后端可能返回JavaScript代码来执行
       if (data.includes('window.close()') || data.includes('location.href')) {
-        eval(data);
+        __wx_log({ msg: "[FRONTEND] 执行返回的JavaScript代码" });
+        try {
+          eval(data);
+        } catch (e) {
+          __wx_log({ msg: "[FRONTEND] eval执行错误: " + e.message });
+        }
       } else {
         // 如果不是脚本，尝试解析为JSON
         try {
@@ -317,12 +384,20 @@ async function __wx_channels_handle_log__() {
   saveAs(blob, "log.txt");
 }
 async function __wx_channels_handle_click_download__(spec) {
+  __wx_log({ msg: "[FRONTEND] __wx_channels_handle_click_download__函数被调用" });
+  console.log("[WX_DEBUG] __wx_channels_handle_click_download__函数被调用, spec:", spec);
+  
   var profile = __wx_channels_store__.profile;
+  console.log("[WX_DEBUG] 获取到的profile:", profile);
+  
   // profile = __wx_channels_store__.profiles.find((p) => p.id === profile.id);
   if (!profile) {
+    __wx_log({ msg: "[FRONTEND] 检测不到视频数据" });
     alert("检测不到视频，请将本工具更新到最新版");
     return;
   }
+  
+  __wx_log({ msg: "[FRONTEND] 视频数据正常，开始下载处理" });
   // console.log(__wx_channels_store__);
   var filename = (() => {
     if (profile.title) {
@@ -467,15 +542,79 @@ async function __wx_channels_handle_download_cover() {
   }
   ins.hide();
 }
-var __wx_channels_tip__ = {};
-var __wx_channels_store__ = {
-  profile: null,
-  profiles: [],
-  keys: {},
-  buffers: [],
-  autoMode: false,
-};
 
+// 立即检查URL中是否包含自动模式标记（从后端注入）
+try {
+  __wx_log({ msg: "[FRONTEND] 开始检查autoMode设置" });
+  // 检查window对象中是否已经设置了autoMode
+  if (typeof window !== 'undefined' && window.__wx_auto_mode_enabled__) {
+    __wx_channels_store__.autoMode = true;
+    console.log("[WX_DEBUG] 检测到自动模式标记，已启用autoMode");
+    __wx_log({ msg: "[FRONTEND] autoMode已启用" });
+  } else {
+    __wx_log({ msg: "[FRONTEND] 未检测到autoMode标记" });
+  }
+} catch (e) {
+  console.log("[WX_DEBUG] 检查autoMode失败:", e);
+  __wx_log({ msg: "[FRONTEND] 检查autoMode失败: " + e.message });
+}
+
+// 初始化调试日志
+console.log("[WX_DEBUG] 微信视频号下载脚本已加载");
+console.log("[WX_DEBUG] 开始执行后续代码...");
+__wx_log({ msg: "[FRONTEND] 脚本主要部分开始加载" });
+
+// 再次检查autoMode状态
+if (typeof window !== 'undefined' && window.__wx_auto_mode_enabled__) {
+  __wx_channels_store__.autoMode = true;
+  console.log("[WX_DEBUG] 再次检测到autoMode标记，已启用");
+  __wx_log({ msg: "[FRONTEND] autoMode状态再次确认: 已启用" });
+} else {
+  __wx_log({ msg: "[FRONTEND] autoMode状态再次确认: 未启用" });
+}
+
+// 检查store状态
+console.log("[WX_DEBUG] store初始化完成:", __wx_channels_store__);
+
+// 移除自定义的profile提取调用，让原有机制正常工作
+
+// 延迟发送日志，避免阻塞脚本执行
+setTimeout(() => {
+  try {
+    console.log("[WX_DEBUG] 准备调用__wx_log");
+    __wx_log({
+      msg: "🚀 [调试] 微信视频号下载脚本已初始化"
+    });
+    console.log("[WX_DEBUG] __wx_log调用成功");
+  } catch (logError) {
+    console.log("[WX_DEBUG] __wx_log调用失败:", logError);
+  }
+}, 100);
+
+// 在setTimeout之后立即添加调试
+try {
+  fetch("/__wx_channels_api/tip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ msg: "[WX_DEBUG] setTimeout之后继续执行" })
+  });
+} catch(e) {}
+
+// 添加错误捕获
+try {
+  console.log("[WX_DEBUG] 检查函数和变量定义...");
+  
+  // 立即发送这个信息
+  try {
+    fetch("/__wx_channels_api/tip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg: "[WX_DEBUG] 开始函数定义阶段" })
+    });
+  } catch(e) {}
+
+  console.log("[WX_DEBUG] 定义__wx_parse_number_with_unit函数");
+  
 // 数字单位转换函数
 function __wx_parse_number_with_unit(text) {
   if (!text) return null;
@@ -507,6 +646,10 @@ function __wx_parse_number_with_unit(text) {
   
   return null;
 }
+
+  console.log("[WX_DEBUG] __wx_parse_number_with_unit函数定义完成");
+  
+  console.log("[WX_DEBUG] 定义__wx_extract_interaction_data函数");
 
 // 修复的互动数据提取
 function __wx_extract_interaction_data() {
@@ -618,7 +761,7 @@ function __wx_extract_interaction_data() {
   return data;
 }
 
-
+  console.log("[WX_DEBUG] __wx_extract_interaction_data函数定义完成");
 
 function __wx_manual_extract_interaction() {
   const data = __wx_extract_interaction_data();
@@ -721,116 +864,277 @@ function __wx_auto_extract_interaction() {
 // 监听profile变化，自动提取互动数据
 let lastVideoId = null;
 let autoCloseTimer = null;
+let profileProcessing = false; // 防止重复处理
 
-setInterval(() => {
-  if (__wx_channels_store__.profile) {
-    const currentVideoId = __wx_channels_store__.profile.id || __wx_channels_store__.profile.title;
-    
-    if (currentVideoId && currentVideoId !== lastVideoId) {
-      lastVideoId = currentVideoId;
-      __wx_auto_extract_interaction();
+// 页面卸载事件监听器
+window.addEventListener('beforeunload', function() {
+  __wx_log({
+    msg: "🧹 [系统] 页面卸载，清理定时器"
+  });
+  
+  // 清理定时器
+  if (autoCloseTimer) {
+    clearTimeout(autoCloseTimer);
+    autoCloseTimer = null;
+  }
+});
+
+  console.log("[WX_DEBUG] 所有函数定义完成，准备启动监听器");
+  
+  // 检查auto模式状态
+  console.log("[WX_DEBUG] 当前autoMode状态:", __wx_channels_store__.autoMode);
+  
+  // 添加调试日志到后端
+  try {
+    fetch("/__wx_channels_api/tip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg: "[WX_DEBUG] 准备启动Profile监听定时器" })
+    });
+  } catch(e) {}
+  
+  console.log("[WX_DEBUG] 启动Profile监听定时器 - 修复版本 v2.0");
+
+  // Profile监听器 - 使用更合理的检查频率
+  let profileCheckCount = 0;
+  try {
+    setInterval(() => {
+      profileCheckCount++;
       
-      // 在auto模式下，延迟关闭页面
-      if (__wx_channels_store__.autoMode) {
-        // 清除之前的定时器
-        if (autoCloseTimer) {
-          clearTimeout(autoCloseTimer);
+      // 只在特殊情况下输出调试信息
+      const shouldLog = (profileCheckCount % 50 === 0); // 每50次检查输出一次
+      
+      // DOM提取逻辑 - 仅在没有profile时尝试一次
+      if (!__wx_channels_store__.profile && profileCheckCount <= 5) {
+        try {
+          const videoElements = [
+            document.querySelector('video'),
+            document.querySelector('[data-objectid]'),
+            document.querySelector('.video-container'),
+            document.querySelector('[data-src*="video"]')
+          ].filter(Boolean);
+          
+          if (videoElements.length > 0) {
+            const currentUrl = window.location.href;
+            const urlMatch = currentUrl.match(/\/([a-zA-Z0-9_-]+)$/);
+            if (urlMatch) {
+              const extractedProfile = {
+                id: urlMatch[1] || 'dom_extracted_' + Date.now(),
+                title: document.title || '未知标题',
+                url: currentUrl,
+                source: 'dom_extraction'
+              };
+              console.log("[WX_DEBUG] DOM提取Profile成功:", extractedProfile);
+              __wx_log({ msg: "[FRONTEND] ✅ DOM提取成功: " + extractedProfile.id });
+              __wx_channels_store__.profile = extractedProfile;
+            }
+          }
+        } catch (e) {
+          console.log("[WX_DEBUG] DOM提取失败:", e.message);
+        }
+      }
+    
+    if (__wx_channels_store__.profile) {
+      console.log("[WX_DEBUG] Profile详情:", {
+        id: __wx_channels_store__.profile.id,
+        title: __wx_channels_store__.profile.title,
+        url: __wx_channels_store__.profile.url,
+        source: __wx_channels_store__.profile.source || 'original'
+      });
+    }
+    
+    if (__wx_channels_store__.profile && !profileProcessing) {
+      const currentVideoId = __wx_channels_store__.profile.id || __wx_channels_store__.profile.title;
+      console.log("[WX_DEBUG] 检查Profile:", currentVideoId);
+      
+      if (currentVideoId && currentVideoId !== lastVideoId) {
+        profileProcessing = true; // 设置处理标志
+        lastVideoId = currentVideoId;
+        
+        console.log("[自动提取] 检测到新视频:", currentVideoId);
+        __wx_auto_extract_interaction();
+        
+        // 在auto模式下，延迟关闭页面
+        if (__wx_channels_store__.autoMode) {
+          // 清除之前的定时器
+          if (autoCloseTimer) {
+            clearTimeout(autoCloseTimer);
+          }
+          
+          console.log("[自动模式] 设置页面关闭定时器...");
+          
+          // 延长等待时间，确保所有数据处理完成
+          autoCloseTimer = setTimeout(() => {
+            console.log("[自动模式] 准备关闭页面，检查处理状态...");
+            
+            // 再次确认处理完成
+            setTimeout(() => {
+              console.log("[自动模式] 任务完成，正在关闭页面...");
+              __wx_log({
+                msg: "[自动模式] 任务完成，正在关闭页面..."
+              });
+              
+              setTimeout(() => {
+                try {
+                  // 方法1: 直接关闭窗口
+                  window.close();
+                  
+                  // 如果无法关闭，尝试其他方法
+                  setTimeout(() => {
+                    // 方法2: 设置opener并关闭
+                    window.opener = window;
+                    window.close();
+                    
+                    // 方法3: 如果还是无法关闭，使用history.back()
+                    setTimeout(() => {
+                      if (history.length > 1) {
+                        history.back();
+                      } else {
+                        // 最后手段：显示完成页面而不是空白页
+                        document.body.innerHTML = `
+                          <div style="
+                            display: flex; 
+                            flex-direction: column; 
+                            justify-content: center; 
+                            align-items: center; 
+                            height: 100vh; 
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            color: white;
+                            text-align: center;
+                          ">
+                            <h1 style="font-size: 48px; margin-bottom: 20px;">✅</h1>
+                            <h2 style="font-size: 24px; margin-bottom: 10px;">任务完成</h2>
+                            <p style="font-size: 16px; margin-bottom: 30px;">视频下载已完成，可以关闭此标签页</p>
+                            <button onclick="window.close()" style="
+                              padding: 12px 24px;
+                              font-size: 16px;
+                              background: rgba(255,255,255,0.2);
+                              border: 2px solid white;
+                              border-radius: 25px;
+                              color: white;
+                              cursor: pointer;
+                              transition: all 0.3s;
+                            " onmouseover="this.style.background='rgba(255,255,255,0.3)'" 
+                               onmouseout="this.style.background='rgba(255,255,255,0.2)'">
+                              关闭标签页
+                            </button>
+                          </div>
+                        `;
+                        document.title = "✅ 任务完成";
+                      }
+                    }, 100);
+                  }, 100);
+                } catch (e) {
+                  console.log("关闭页面失败:", e);
+                  window.location.href = "about:blank";
+                }
+              }, 1000);
+            }, 2000); // 额外等待2秒确保数据处理完成
+          }, 8000); // 增加到8秒，给数据处理更多时间
         }
         
-        // 设置新的关闭定时器
-        autoCloseTimer = setTimeout(() => {
-          console.log("[自动模式] 任务完成，正在关闭页面...");
-          __wx_log({
-            msg: "[自动模式] 任务完成，正在关闭页面..."
-          });
-          
-          setTimeout(() => {
-            // 尝试多种方式关闭标签页
-            try {
-              // 方法1: 直接关闭窗口
-              window.close();
-              
-              // 如果无法关闭，尝试其他方法
-              setTimeout(() => {
-                // 方法2: 设置opener并关闭
-                window.opener = window;
-                window.close();
-                
-                // 方法3: 如果还是无法关闭，使用history.back()
-                setTimeout(() => {
-                  if (history.length > 1) {
-                    history.back();
-                  } else {
-                    // 最后手段：显示完成页面而不是空白页
-                    document.body.innerHTML = `
-                      <div style="
-                        display: flex; 
-                        flex-direction: column; 
-                        justify-content: center; 
-                        align-items: center; 
-                        height: 100vh; 
-                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        color: white;
-                        text-align: center;
-                      ">
-                        <h1 style="font-size: 48px; margin-bottom: 20px;">✅</h1>
-                        <h2 style="font-size: 24px; margin-bottom: 10px;">任务完成</h2>
-                        <p style="font-size: 16px; margin-bottom: 30px;">视频下载已完成，可以关闭此标签页</p>
-                        <button onclick="window.close()" style="
-                          padding: 12px 24px;
-                          font-size: 16px;
-                          background: rgba(255,255,255,0.2);
-                          border: 2px solid white;
-                          border-radius: 25px;
-                          color: white;
-                          cursor: pointer;
-                          transition: all 0.3s;
-                        " onmouseover="this.style.background='rgba(255,255,255,0.3)'" 
-                           onmouseout="this.style.background='rgba(255,255,255,0.2)'">
-                          关闭标签页
-                        </button>
-                      </div>
-                    `;
-                    document.title = "✅ 任务完成";
-                  }
-                }, 100);
-              }, 100);
-            } catch (e) {
-              console.log("关闭页面失败:", e);
-              // 如果都失败了，至少跳转到空白页
-              window.location.href = "about:blank";
-            }
-          }, 1000);
-        }, 5000); // 5秒后关闭页面，给下载一些时间
+        // 延迟重置处理标志，防止过快重复处理
+        setTimeout(() => {
+          profileProcessing = false;
+        }, 3000);
       }
     }
-  }
-}, 2000);
-var $icon = document.createElement("div");
-$icon.innerHTML =
-  '<div data-v-6548f11a data-v-132dee25 class="click-box op-item item-gap-combine" role="button" aria-label="下载" style="padding: 4px 4px 4px 4px; --border-radius: 4px; --left: 0; --top: 0; --right: 0; --bottom: 0;"><svg data-v-132dee25 class="svg-icon icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="28" height="28"><path d="M213.333333 853.333333h597.333334v-85.333333H213.333333m597.333334-384h-170.666667V128H384v256H213.333333l298.666667 298.666667 298.666667-298.666667z"></path></svg></div>';
-var __wx_channels_video_download_btn__ = $icon.firstChild;
-__wx_channels_video_download_btn__.onclick = () => {
-  if (!window.__wx_channels_store__.profile) {
-    return;
-  }
-  __wx_channels_handle_click_download__(
-    window.__wx_channels_store__.profile.spec[0]
-  );
-};
+  }, 2000);
+    
+  } catch (intervalError) {
+        console.error("[WX_DEBUG] Profile监听器执行出错:", intervalError);
+        try {
+          fetch("/__wx_channels_api/tip", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ msg: "[WX_DEBUG] Profile监听器错误: " + intervalError.message })
+          });
+        } catch(e) {}
+      }
+    
+    // 成功启动监听器的确认
+    console.log("[WX_DEBUG] Profile监听器已成功启动");
+    try {
+      fetch("/__wx_channels_api/tip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ msg: "[WX_DEBUG] Profile监听器已成功启动" })
+      });
+    } catch(e) {}
+} catch (error) {
+  console.error("[WX_DEBUG] 脚本执行出错:", error);
+  try {
+    fetch("/__wx_channels_api/tip", {
+      method: "POST", 
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg: "❌ [调试] 脚本执行错误: " + error.message })
+    });
+  } catch(e) {}
+}
+
+// 添加下载按钮创建的调试日志
+console.log("[WX_DEBUG] 开始创建下载按钮");
+try {
+  fetch("/__wx_channels_api/tip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ msg: "[WX_DEBUG] 开始创建下载按钮" })
+  });
+} catch(e) {}
+
+try {
+  var $icon = document.createElement("div");
+  $icon.innerHTML =
+    '<div data-v-6548f11a data-v-132dee25 class="click-box op-item item-gap-combine" role="button" aria-label="下载" style="padding: 4px 4px 4px 4px; --border-radius: 4px; --left: 0; --top: 0; --right: 0; --bottom: 0;"><svg data-v-132dee25 class="svg-icon icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="28" height="28"><path d="M213.333333 853.333333h597.333334v-85.333333H213.333333m597.333334-384h-170.666667V128H384v256H213.333333l298.666667 298.666667 298.666667-298.666667z"></path></svg></div>';
+  var __wx_channels_video_download_btn__ = $icon.firstChild;
+  __wx_channels_video_download_btn__.onclick = () => {
+    __wx_log({ msg: "[FRONTEND] 下载按钮被点击" });
+    console.log("[WX_DEBUG] 下载按钮被点击");
+    
+    if (!window.__wx_channels_store__.profile) {
+      __wx_log({ msg: "[FRONTEND] profile数据不存在，无法下载" });
+      console.log("[WX_DEBUG] profile数据不存在:", window.__wx_channels_store__);
+      return;
+    }
+    
+    __wx_log({ msg: "[FRONTEND] profile数据存在，开始下载" });
+    console.log("[WX_DEBUG] profile数据:", window.__wx_channels_store__.profile);
+    
+    __wx_channels_handle_click_download__(
+      window.__wx_channels_store__.profile.spec[0]
+    );
+  };
+  console.log("[WX_DEBUG] 下载按钮创建成功");
+  
+} catch (buttonError) {
+  console.error("[WX_DEBUG] 创建下载按钮失败:", buttonError);
+  try {
+    fetch("/__wx_channels_api/tip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg: "[WX_DEBUG] 创建下载按钮失败: " + buttonError.message })
+    });
+  } catch(e) {}
+}
+
+console.log("[WX_DEBUG] 开始寻找下载按钮插入位置");
+
 var count = 0;
 var __timer = setInterval(() => {
   count += 1;
+  console.log("[WX_DEBUG] 搜索下载按钮容器，尝试次数:", count);
   const $wrap3 = document.getElementsByClassName("full-opr-wrp layout-row")[0];
   const $wrap4 = document.getElementsByClassName("full-opr-wrp layout-col")[0];
   if (!$wrap3 && !$wrap4) {
     if (count >= 5) {
+      console.log("[WX_DEBUG] 未找到下载按钮容器，停止搜索");
       clearInterval(__timer);
       __timer = null;
     }
     return;
   }
+  console.log("[WX_DEBUG] 找到下载按钮容器");
   clearInterval(__timer);
   __timer = null;
   if ($wrap3) {
@@ -846,9 +1150,18 @@ var __timer = setInterval(() => {
       '<div data-v-132dee25 class="context-menu__wrp item-gap-combine op-more-btn"><div class="context-menu__target"><div data-v-6548f11a data-v-132dee25 class="click-box op-item" role="button" aria-label="下载" style="padding: 4px 4px 4px 4px; --border-radius: 4px; --left: 0; --top: 0; --right: 0; --bottom: 0;"><svg data-v-132dee25 class="svg-icon icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="28" height="28"><path d="M213.333333 853.333333h597.333334v-85.333333H213.333333m597.333334-384h-170.666667V128H384v256H213.333333l298.666667 298.666667 298.666667-298.666667z"></path></svg></div></div></div>';
     __wx_channels_video_download_btn__ = $icon.firstChild;
     __wx_channels_video_download_btn__.onclick = () => {
+      __wx_log({ msg: "[FRONTEND] 下载按钮被点击(第二个)" });
+      console.log("[WX_DEBUG] 下载按钮被点击(第二个)");
+      
       if (!window.__wx_channels_store__.profile) {
+        __wx_log({ msg: "[FRONTEND] profile数据不存在，无法下载(第二个)" });
+        console.log("[WX_DEBUG] profile数据不存在(第二个):", window.__wx_channels_store__);
         return;
       }
+      
+      __wx_log({ msg: "[FRONTEND] profile数据存在，开始下载(第二个)" });
+      console.log("[WX_DEBUG] profile数据(第二个):", window.__wx_channels_store__.profile);
+      
       __wx_channels_handle_click_download__(
         window.__wx_channels_store__.profile.spec[0]
       );
@@ -861,3 +1174,7 @@ var __timer = setInterval(() => {
     $wrap4.insertBefore(__wx_channels_video_download_btn__, relative_node);
   }
 }, 1000);
+
+// 脚本执行完成标记
+console.log("[WX_DEBUG] 微信视频号下载脚本执行完成");
+__wx_log({ msg: "🚀 [调试] 微信视频号下载脚本已完全加载" });

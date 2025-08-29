@@ -48,8 +48,16 @@ var DefaultPort = 2023
 var uninstallFlag bool
 var globalDownloadDir string
 var globalAutoMode bool
+var globalDebugMode bool
 var globalCSVManager *csv.CSVManager
 var processedVideos = make(map[string]bool) // 防止重复处理同一视频
+
+// 调试日志函数
+func debugLog(format string, args ...interface{}) {
+	if globalDebugMode {
+		fmt.Printf("[DEBUG] "+format+"\n", args...)
+	}
+}
 func main() {
 	cobra.MousetrapHelpText = ""
 	var (
@@ -57,6 +65,7 @@ func main() {
 		port        int
 		downloadDir string
 		autoMode    bool
+		debugMode   bool
 	)
 
 	root_cmd := &cobra.Command{
@@ -69,6 +78,7 @@ func main() {
 				Port:        port,
 				DownloadDir: downloadDir,
 				AutoMode:    autoMode,
+				DebugMode:   debugMode,
 			})
 		},
 	}
@@ -77,6 +87,7 @@ func main() {
 	root_cmd.Flags().IntVar(&port, "port", DefaultPort, "代理服务器端口")
 	root_cmd.Flags().StringVar(&downloadDir, "download-dir", "", "自动下载保存目录")
 	root_cmd.Flags().BoolVar(&autoMode, "auto", false, "开启自动下载模式")
+	root_cmd.Flags().BoolVar(&debugMode, "debug", false, "开启调试模式，输出详细日志")
 	var (
 		video_url         string
 		filename          string
@@ -165,6 +176,7 @@ type RootCommandArg struct {
 	Port        int
 	DownloadDir string
 	AutoMode    bool
+	DebugMode   bool
 }
 
 func root_command(args RootCommandArg) {
@@ -173,6 +185,7 @@ func root_command(args RootCommandArg) {
 	// 设置全局配置
 	globalDownloadDir = args.DownloadDir
 	globalAutoMode = args.AutoMode
+	globalDebugMode = args.DebugMode
 	
 	// 验证配置
 	if globalAutoMode && globalDownloadDir == "" {
@@ -349,13 +362,23 @@ func root_command(args RootCommandArg) {
         Sunny.ProcessAddName("WeChatAppEx")
     }
 	
+	if globalDebugMode {
+		color.Yellow("\n🐛 调试模式已开启，将输出详细日志")
+	}
+	
 	if globalAutoMode {
 		color.Green("\n\n✅ 自动下载服务已启动！")
 		fmt.Println("📱 请打开微信视频号，浏览视频即可自动下载")
 		fmt.Println("🎯 完全自动，无需手动操作")
+		if globalDebugMode {
+			fmt.Println("🐛 调试模式：将显示详细的请求和响应日志")
+		}
 		fmt.Println("\n⚠️  按 Ctrl+C 退出服务")
 	} else {
 		color.Green("\n\n✅ 服务已正确启动，请打开需要下载的视频号页面进行下载")
+		if globalDebugMode {
+			fmt.Println("🐛 调试模式：将显示详细的请求和响应日志")
+		}
 		fmt.Println("\n\n服务正在运行，按 Ctrl+C 退出...")
 	}
 	select {}
@@ -947,26 +970,20 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 	hostname := parsed_url.Hostname()
 	path := parsed_url.Path
 	
-	// 白名单：只处理微信相关域名
-	allowedDomains := []string{
-		"channels.weixin.qq.com",
-		"finder.video.qq.com", 
-		"wxsns.qq.com",
-		"mmbiz.qpic.cn",
-		"wx.qlogo.cn",
-	}
+	/*
+	 * 域名白名单功能已完全移除 (2024年调试结果)
+	 * 
+	 * 移除原因：
+	 * 1. 白名单会阻止关键API /__wx_channels_api/profile 的处理
+	 * 2. 微信可能随时更换CDN域名或API端点
+	 * 3. 过度限制导致系统在微信更新后失效
+	 * 
+	 * 当前策略：处理所有域名，通过调试模式监控变更
+	 */
 	
-	isAllowed := false
-	for _, domain := range allowedDomains {
-		if strings.Contains(hostname, domain) {
-			isAllowed = true
-			break
-		}
-	}
-	
-	// 对于非微信域名，直接放行
-	if !isAllowed {
-		return
+	// 只记录重要的页面请求
+	if strings.Contains(path, "/web/pages/") || strings.Contains(path, "__wx_channels_api") {
+		debugLog("🎯 处理微信域名: %s%s", hostname, path)
 	}
 	if Conn.Type() == public.HttpSendRequest {
 		Conn.GetRequestHeader().Del("Accept-Encoding")
@@ -987,13 +1004,16 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 		if path == "/__wx_channels_api/profile" {
 			request_body := Conn.GetRequestBody()
 			
+			fmt.Printf("\n📋 收到profile数据请求\n")
+			
 			// 如果开启自动模式，直接触发下载
 			if globalAutoMode {
 				var profileData map[string]interface{}
 				err := json.Unmarshal(request_body, &profileData)
 				if err == nil {
+					fmt.Printf("✅ profile数据解析成功\n")
 					
-					// 防止重复处理同一视频
+					// 防止重复处理同一视频 - 改进逻辑
 					videoID := ""
 					if id, ok := profileData["id"]; ok {
 						videoID = fmt.Sprintf("%v", id)
@@ -1004,17 +1024,41 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 						}
 					}
 					
-					if videoID != "" && processedVideos[videoID] {
-						fmt.Printf("⏭️  视频已处理过，跳过: %s\n", videoID)
+					// 检查是否有互动数据更新，如果有则允许重新处理
+					hasInteractionData := false
+					if interactionData, ok := profileData["interactionData"]; ok {
+						if interactionMap, ok := interactionData.(map[string]interface{}); ok {
+							// 检查是否有任何非零的互动数据
+							if likes, ok := interactionMap["likes"].(float64); ok && likes > 0 {
+								hasInteractionData = true
+							}
+							if shares, ok := interactionMap["shares"].(float64); ok && shares > 0 {
+								hasInteractionData = true
+							}
+							if favorites, ok := interactionMap["favorites"].(float64); ok && favorites > 0 {
+								hasInteractionData = true
+							}
+							if comments, ok := interactionMap["comments"].(float64); ok && comments > 0 {
+								hasInteractionData = true
+							}
+						}
+					}
+					
+					// 如果视频已处理且没有新的互动数据，则跳过
+					if videoID != "" && processedVideos[videoID] && !hasInteractionData {
+						fmt.Printf("⏭️  视频已处理过且无新数据，跳过: %s\n", videoID)
 						headers := http.Header{}
 						headers.Set("Content-Type", "application/json")
 						headers.Set("__debug", "fake_resp")
-						Conn.StopRequest(200, "{}", headers)
+						Conn.StopRequest(200, `{"success":true,"message":"already processed"}`, headers)
 						return
 					}
 					
 					if videoID != "" {
 						processedVideos[videoID] = true
+						if hasInteractionData {
+							fmt.Printf("🔄 检测到互动数据更新，重新处理: %s\n", videoID)
+						}
 					}
 					
 					// 构造自动下载请求
@@ -1107,11 +1151,16 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 					
 					// 异步触发下载，并处理页面关闭
 					go func() {
+						fmt.Printf("🔄 开始处理自动下载请求...\n")
 						success, message := handleAutoDownload(autoReq)
 						if success {
-							fmt.Printf("🚪 [自动模式] 页面处理完成，需要关闭: %s\n", message)
+							fmt.Printf("✅ [自动模式] 页面处理完成: %s\n", message)
+						} else {
+							fmt.Printf("❌ [自动模式] 页面处理失败: %s\n", message)
 						}
 					}()
+				} else {
+					fmt.Printf("❌ profile数据解析失败: %v\n", err)
 				}
 			}
 			
@@ -1192,8 +1241,72 @@ setTimeout(function() {
 	}
 	if Conn.Type() == public.HttpResponseOK {
 		content_type := strings.ToLower(Conn.GetResponseHeader().Get("Content-Type"))
+		// 调试模式：监控关键资源和API变更，帮助快速修复未来的微信更新
+		if globalDebugMode {
+			// 1. 重点关注微信CDN资源（新JS文件可能出现在这里）
+			if strings.Contains(hostname, "res.wx.qq.com") {
+				fmt.Printf("[调试] 🎯 微信CDN: %s%s (type: %s)\n", hostname, path, content_type)
+			}
+			// 2. 监控微信JS文件（新的profile注入点可能在这里）
+			if (strings.Contains(hostname, "weixin") || strings.Contains(hostname, "channels") || strings.Contains(hostname, "wx.qq.com")) && 
+			   (strings.Contains(content_type, "javascript") || strings.Contains(path, ".js")) {
+				fmt.Printf("[调试] 🔍 微信JS: %s%s (type: %s)\n", hostname, path, content_type)
+			}
+			// 3. 记录所有微信API响应（发现新API端点）
+			if strings.Contains(hostname, "weixin") || strings.Contains(hostname, "channels") || strings.Contains(hostname, "finder") {
+				fmt.Printf("[调试] 📡 微信响应: %s%s (type: %s)\n", hostname, path, content_type)
+			}
+		}
 		if Conn.GetResponseBody() != nil {
 			request_body := Conn.GetResponseBody()
+			
+			// 在调试模式下监控API响应内容（用于发现新的数据源和API变更）
+			if globalDebugMode && strings.Contains(content_type, "application/json") {
+				response_text := string(request_body)
+				
+				// 1. 监控视频下载关键数据
+				if strings.Contains(response_text, "decodekey") ||
+				   strings.Contains(response_text, "videoUrl") ||
+				   strings.Contains(response_text, "video_url") ||
+				   strings.Contains(response_text, "decrypt") ||
+				   strings.Contains(response_text, ".mp4") {
+					fmt.Printf("🎬 [视频数据] %s%s\n", hostname, path)
+					if len(response_text) > 500 {
+						fmt.Printf("📹 [视频数据] %s...\n", response_text[:500])
+					} else {
+						fmt.Printf("📹 [视频数据] %s\n", response_text)
+					}
+				}
+				
+				// 2. 监控profile相关数据
+				if strings.Contains(response_text, "objectDesc") ||
+				   strings.Contains(response_text, "contact") ||
+				   strings.Contains(response_text, "nickname") ||
+				   strings.Contains(response_text, "username") ||
+				   strings.Contains(response_text, "headUrl") ||
+				   strings.Contains(response_text, "avatar") ||
+				   strings.Contains(response_text, "author") ||
+				   strings.Contains(response_text, "creator") {
+					fmt.Printf("🎯 [Profile数据] %s%s\n", hostname, path)
+					if len(response_text) > 300 {
+						fmt.Printf("📄 [Profile数据] %s...\n", response_text[:300])
+					} else {
+						fmt.Printf("📄 [Profile数据] %s\n", response_text)
+					}
+				}
+				
+				// 3. 记录新API端点
+				if strings.Contains(path, "__wx_channels_api") && !strings.Contains(path, "/tip") {
+					fmt.Printf("🔔 [新API端点] 发现可能的新接口: %s%s\n", hostname, path)
+					if len(response_text) > 200 {
+						fmt.Printf("🔍 [新API端点] %s...\n", response_text[:200])
+					}
+				}
+			}
+			
+			// 重要：确保JSON响应始终被正确处理（不依赖调试模式）
+			// 这些响应包含关键的profile数据和视频信息
+			
 			// if content_type == "text/css" {
 			// 	Conn.Response.Body = io.NopCloser(bytes.NewBuffer(Body))
 			// 	return
@@ -1229,8 +1342,8 @@ setTimeout(function() {
 			// fmt.Println("HttpCallback", Conn.Type, host, path)
 			// fmt.Println("Response ContentType is", content_type)
 			if content_type == "text/html; charset=utf-8" {
-				// fmt.Println("\n\n检测到页面打开")
-				// fmt.Println(path)
+				fmt.Printf("\n🌐 检测到HTML页面: %s%s\n", hostname, path)
+				debugLog("📄 HTML页面大小: %d bytes", len(request_body))
 				html := string(request_body)
 				script_reg1 := regexp.MustCompile(`src="([^"]{1,})\.js"`)
 				html = script_reg1.ReplaceAllString(html, `src="$1.js`+v+`"`)
@@ -1268,32 +1381,63 @@ setTimeout(function() {
 				//       });
 				//       // 之后即可使用 PageSpy，前往 https://pagespy.jikejishu.com 体验
 				//     </script>`
-				if hostname == "channels.weixin.qq.com" && (path == "/web/pages/feed" || path == "/web/pages/home") {
-					script := fmt.Sprintf(`<script>%s</script>`, main_js)
+				// 扩展路径匹配，包含更多视频号页面
+				if hostname == "channels.weixin.qq.com" && strings.HasPrefix(path, "/web/pages/") {
+					fmt.Printf("✅ 匹配到目标页面，准备注入JavaScript脚本\n")
+					debugLog("💉 JavaScript脚本大小: %d bytes", len(main_js))
+					
+					// 调试：检查HTML中是否包含目标函数
+					if strings.Contains(html, "finderGetCommentDetail") {
+						fmt.Printf("🔍 [调试] HTML中发现 finderGetCommentDetail 函数\n")
+					}
+					if strings.Contains(html, "updateDetail") {
+						fmt.Printf("🔍 [调试] HTML中发现 updateDetail 函数\n")
+					}
+					if strings.Contains(html, "virtual_svg-icons-register") {
+						fmt.Printf("🔍 [调试] HTML中发现 virtual_svg-icons-register 引用\n")
+						
+						// 提取引用的具体方式
+						lines := strings.Split(html, "\n")
+						for i, line := range lines {
+							if strings.Contains(line, "virtual_svg-icons-register") {
+								fmt.Printf("🔍 [调试] 第%d行: %s\n", i+1, strings.TrimSpace(line))
+								break
+							}
+						}
+					}
 					autoModeScript := ""
 					if globalAutoMode {
-						autoModeScript = fmt.Sprintf(`<script>
-						(function() {
-							if (window.__wx_channels_store__) {
-								window.__wx_channels_store__.autoMode = true;
-							} else {
-								setTimeout(function() {
-									if (window.__wx_channels_store__) {
-										window.__wx_channels_store__.autoMode = true;
-									}
-								}, 100);
-							}
-						})();
-						</script>`)
+						autoModeScript = `<script>
+						console.log("[BACKEND] 准备设置自动模式标记");
+						window.__wx_auto_mode_enabled__ = true;
+						console.log("[BACKEND] 自动模式已启用，标记已设置");
+						console.log("[BACKEND] window.__wx_auto_mode_enabled__ =", window.__wx_auto_mode_enabled__);
+						</script>`
 					}
-					html = strings.Replace(html, "<head>", "<head>\n"+script+autoModeScript+script2, 1)
+					script := fmt.Sprintf(`<script>%s</script>`, main_js)
+					debugLog("💉 脚本注入到<head>标签完成")
+					html = strings.Replace(html, "<head>", "<head>\n"+autoModeScript+script+script2, 1)
+					debugLog("📝 修改后页面大小: %d bytes", len(html))
 					Conn.SetResponseBodyIO(io.NopCloser(bytes.NewBuffer([]byte(html))))
 					return
+				} else {
+					fmt.Printf("❌ 页面不匹配注入条件: hostname=%s, path=%s\n", hostname, path)
+					fmt.Printf("   需要: hostname=channels.weixin.qq.com, path以/web/pages/开头\n")
 				}
 				Conn.SetResponseBodyIO(io.NopCloser(bytes.NewBuffer([]byte(html))))
 				return
 			}
-			if content_type == "application/javascript" {
+			// 调试模式：监控JavaScript文件（新的profile注入点可能在这里）
+			if globalDebugMode && (strings.Contains(content_type, "javascript") || strings.Contains(content_type, "ecmascript") || strings.Contains(content_type, "js")) {
+				fmt.Printf("[调试] 🔍 拦截JS文件: %s%s (type: %s)\n", hostname, path, content_type)
+				// 特别关注微信CDN的JS文件
+				if strings.Contains(hostname, "res.wx.qq.com") {
+					fmt.Printf("🎯 [重要] 微信CDN JS文件: %s\n", path)
+				}
+			}
+			
+			// 处理JavaScript文件（版本控制和profile注入）
+			if strings.Contains(content_type, "javascript") || strings.Contains(content_type, "ecmascript") || strings.Contains(content_type, "js") {
 				content := string(request_body)
 				dep_reg := regexp.MustCompile(`"js/([^"]{1,})\.js"`)
 				from_reg := regexp.MustCompile(`from {0,1}"([^"]{1,})\.js"`)
@@ -1329,8 +1473,10 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 					return
 				}
 				if util.Includes(path, "/t/wx_fed/finder/web/web-finder/res/js/virtual_svg-icons-register") {
+					fmt.Printf("\n🔧 [调试] 拦截到目标JS文件: %s\n", path)
 					regexp1 := regexp.MustCompile(`async finderGetCommentDetail\((\w+)\)\{return(.*?)\}async`)
 					replaceStr1 := `async finderGetCommentDetail($1) {
+					console.log("[PROFILE_DEBUG] finderGetCommentDetail被调用");
 					var feedResult = await$2;
 					var data_object = feedResult.data.object;
 					if (!data_object.objectDesc) {
@@ -1368,6 +1514,7 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 						body: JSON.stringify(profile)
 					});
 					if (window.__wx_channels_store__) {
+					console.log("[PROFILE_DEBUG] 创建profile成功", profile);
 					__wx_channels_store__.profile = profile;
 					window.__wx_channels_store__.profiles.push(profile);
 					
@@ -1410,7 +1557,9 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 					content = regex2.ReplaceAllString(content, replaceStr2)
 					regex5 := regexp.MustCompile(`this.updateDetail\(o\)`)
 					replaceStr5 := `(() => {
+					console.log("[PROFILE_DEBUG] updateDetail被调用", o);
 					if (Object.keys(o).length===0){
+					console.log("[PROFILE_DEBUG] updateDetail - 空对象，返回");
 					return;
 					}
 					var data_object = o;
@@ -1438,6 +1587,8 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 						contact: data_object.contact
 					};
 					if (window.__wx_channels_store__) {
+console.log("[PROFILE_DEBUG] updateDetail创建profile成功", profile);
+__wx_channels_store__.profile = profile;
 window.__wx_channels_store__.profiles.push(profile);
 
 // 直接调用自动下载逻辑

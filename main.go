@@ -209,10 +209,12 @@ func root_command(args RootCommandArg) {
 		fmt.Printf("⚡ 自动跳过重复文件\n")
 	}
 	
-	// 初始化CSV管理器（在目录确定后）
+	// 初始化CSV管理器（在data目录中）
 	if globalDownloadDir != "" {
-		globalCSVManager = csv.NewCSVManager(globalDownloadDir)
-		fmt.Printf("📊 CSV记录功能已启用\n")
+		dataDir := path.Join(globalDownloadDir, "data")
+		os.MkdirAll(dataDir, 0755) // 确保data目录存在
+		globalCSVManager = csv.NewCSVManager(dataDir)
+		fmt.Printf("📊 CSV记录功能已启用 -> data/video_metadata.csv\n")
 	}
 
 	signal_chan := make(chan os.Signal, 1)
@@ -666,7 +668,13 @@ func updateVideoFileInfo(req AutoDownloadRequest, filePath string, fileSize int6
 	}
 	
 	// 更新文件相关信息
-	existingRecord.FilePath = filePath
+	// 转换为相对路径，便于数据分析
+	relativePath := strings.TrimPrefix(filePath, globalDownloadDir)
+	if strings.HasPrefix(relativePath, "/") || strings.HasPrefix(relativePath, "\\") {
+		relativePath = relativePath[1:]
+	}
+	
+	existingRecord.FilePath = relativePath
 	existingRecord.FileSize = fileSize
 	existingRecord.DownloadTime = time.Now() // 更新下载完成时间
 	
@@ -689,45 +697,54 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 	// 在下载前保存视频数据和互动数据
 	saveVideoDataBeforeDownload(req)
 	
-	// 构建用户目录
-	userDir := req.Nickname
-	if userDir == "" {
-		userDir = "未知用户"
+	// 获取用户信息
+	userPrefix := req.Nickname
+	if userPrefix == "" {
+		userPrefix = "未知用户"
 	}
-	userDir = util.SafeFilename(userDir)
+	userPrefix = util.SafeFilename(userPrefix)
 	
-	// 创建用户子目录
-	userPath := path.Join(globalDownloadDir, userDir)
-	err := os.MkdirAll(userPath, 0755)
-	if err != nil {
-		fmt.Printf("[自动下载] 创建用户目录失败: %v\n", err)
-		return false, "failed to create user directory"
-	}
+	// 创建分类目录结构，包含用户子目录
+	videosBaseDir := path.Join(globalDownloadDir, "videos")
+	coversBaseDir := path.Join(globalDownloadDir, "covers")
+	dataDir := path.Join(globalDownloadDir, "data")
+	logsDir := path.Join(globalDownloadDir, "logs")
 	
-	// 生成文件名
-	filename := req.Filename
-	if filename == "" {
-		if req.Title != "" {
-			filename = req.Title
-		} else if req.VideoID != "" {
-			filename = req.VideoID
-		} else {
-			filename = strconv.Itoa(int(time.Now().Unix()))
+	videosUserDir := path.Join(videosBaseDir, userPrefix)
+	coversUserDir := path.Join(coversBaseDir, userPrefix)
+	
+	// 创建所有必要目录
+	dirs := []string{videosUserDir, coversUserDir, dataDir, path.Join(dataDir, "analytics"), logsDir}
+	for _, dir := range dirs {
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			fmt.Printf("[自动下载] 创建目录失败 %s: %v\n", dir, err)
+			return false, "failed to create directory"
 		}
 	}
-	filename = util.SafeFilename(filename)
+	
+	// 生成文件名：只包含视频标题
+	title := req.Title
+	if title == "" {
+		if req.VideoID != "" {
+			title = req.VideoID
+		} else {
+			title = strconv.Itoa(int(time.Now().Unix()))
+		}
+	}
+	filename := util.SafeFilename(title)
 	
 	// 检查是否已存在（重复检测）
 	var targetFile string
 	switch req.Type {
 	case "picture":
-		targetFile = path.Join(userPath, filename+".zip")
+		targetFile = path.Join(videosUserDir, filename+".zip")
 	default:
-		targetFile = path.Join(userPath, filename+".mp4")
+		targetFile = path.Join(videosUserDir, filename+".mp4")
 	}
 	
 	if _, err := os.Stat(targetFile); err == nil {
-		fmt.Printf("⏭️  文件已存在，跳过下载: %s/%s\n", userDir, filename)
+		fmt.Printf("⏭️  文件已存在，跳过下载: %s\n", filename)
 		
 		// 在auto模式下，即使跳过下载也要触发页面关闭逻辑
 		if globalAutoMode {
@@ -736,40 +753,111 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 		return true, "file already exists, skipped"
 	}
 	
-	// 如果是视频，也检查基于VideoID的文件名
-	if req.Type == "media" && req.VideoID != "" && req.VideoID != filename {
-		videoIdFile := path.Join(userPath, util.SafeFilename(req.VideoID)+".mp4")
-		if _, err := os.Stat(videoIdFile); err == nil {
-			fmt.Printf("⏭️  视频已存在，跳过下载: %s/%s\n", userDir, util.SafeFilename(req.VideoID))
-			
-			// 在auto模式下，即使跳过下载也要触发页面关闭逻辑
-			if globalAutoMode {
-				fmt.Printf("🚪 [自动模式] 文件已存在，任务完成\n")
-			}
-			return true, "file already exists, skipped"
-		}
-	}
-	
 	fmt.Printf("\n🎬 用户: %s\n", req.Nickname)
-	fmt.Printf("📁 目录: %s\n", userDir)
+	fmt.Printf("📁 用户目录: videos/%s/ 和 covers/%s/\n", userPrefix, userPrefix)
 	
 	switch req.Type {
 	case "picture":
-		downloadPictureAutoWithPath(req, filename, userPath)
+		downloadPictureAutoWithPath(req, filename, videosUserDir)
 		return true, "picture download completed"
 	case "media":
 		if req.Key != 0 {
 			fmt.Printf("🔐 加密视频，开始下载并解密: %s\n", filename)
-			downloadEncryptedVideoAutoWithPath(req, filename, userPath)
+			downloadEncryptedVideoAutoWithPath(req, filename, videosUserDir)
 		} else {
 			fmt.Printf("🎥 开始下载视频: %s\n", filename)
-			downloadVideoAutoWithPath(req, filename, userPath)
+			downloadVideoAutoWithPath(req, filename, videosUserDir)
 		}
 		return true, "video download completed"
 	default:
 		fmt.Printf("❓ 未知类型: %s\n", req.Type)
 		return false, "unknown type"
 	}
+}
+
+func handleCoverDownload(req CoverDownloadRequest) (bool, string) {
+	if !globalAutoMode {
+		return false, "auto mode not enabled"
+	}
+	
+	if req.CoverURL == "" {
+		return false, "no cover URL provided"
+	}
+	
+	// 获取用户信息
+	userPrefix := req.Nickname
+	if userPrefix == "" {
+		userPrefix = "未知用户"
+	}
+	userPrefix = util.SafeFilename(userPrefix)
+	
+	// 创建covers用户目录
+	coversUserDir := path.Join(globalDownloadDir, "covers", userPrefix)
+	err := os.MkdirAll(coversUserDir, 0755)
+	if err != nil {
+		fmt.Printf("[封面下载] 创建covers用户目录失败: %v\n", err)
+		return false, "failed to create covers user directory"
+	}
+	
+	// 生成文件名：只包含视频标题
+	title := req.Title
+	if title == "" {
+		if req.Filename != "" {
+			title = req.Filename
+		} else {
+			title = strconv.Itoa(int(time.Now().Unix()))
+		}
+	}
+	filename := util.SafeFilename(title)
+	
+	// 检查封面文件是否已存在
+	coverFile := path.Join(coversUserDir, filename+".jpg")
+	if _, err := os.Stat(coverFile); err == nil {
+		fmt.Printf("⏭️  封面已存在，跳过下载: %s/%s.jpg\n", userPrefix, filename)
+		return true, "cover already exists, skipped"
+	}
+	
+	fmt.Printf("🖼️  开始下载封面: %s\n", filename)
+	
+	// 确保使用HTTPS
+	coverURL := req.CoverURL
+	if strings.HasPrefix(coverURL, "http://") {
+		coverURL = strings.Replace(coverURL, "http://", "https://", 1)
+	}
+	
+	// 下载封面
+	resp, err := http.Get(coverURL)
+	if err != nil {
+		fmt.Printf("❌ 封面下载失败: %v\n", err.Error())
+		return false, "failed to download cover"
+	}
+	defer resp.Body.Close()
+	
+	// 创建封面文件
+	file, err := os.Create(coverFile)
+	if err != nil {
+		fmt.Printf("❌ 创建封面文件失败: %v\n", err.Error())
+		return false, "failed to create cover file"
+	}
+	defer file.Close()
+	
+	// 保存封面
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		fmt.Printf("❌ 保存封面失败: %v\n", err.Error())
+		return false, "failed to save cover"
+	}
+	
+	fmt.Printf("✅ 封面下载完成: covers/%s/%s.jpg\n", userPrefix, filename)
+	
+	// 更新对应视频记录的封面路径信息
+	if globalCSVManager != nil {
+		// 这里可以根据filename找到对应的视频记录并更新封面路径
+		// 暂时跳过具体实现，需要更多的关联逻辑
+		_ = "covers/" + filename + ".jpg" // 防止未使用变量错误
+	}
+	
+	return true, "cover download completed"
 }
 
 func downloadVideoAutoWithPath(req AutoDownloadRequest, filename, targetDir string) {
@@ -985,6 +1073,13 @@ type AutoDownloadRequest struct {
 	InteractionData *InteractionData           `json:"interactionData"`
 	Duration        int                        `json:"duration"`
 	FileSize        int64                      `json:"fileSize"`
+}
+
+type CoverDownloadRequest struct {
+	CoverURL  string `json:"coverUrl"`
+	Filename  string `json:"filename"`
+	Nickname  string `json:"nickname"`
+	Title     string `json:"title"`
 }
 
 func HttpCallback(Conn SunnyNet.ConnHTTP) {
@@ -1280,6 +1375,31 @@ setTimeout(function() {
 			} else {
 				// 失败时返回JSON响应，不关闭页面
 				headers.Set("Content-Type", "application/json")
+				response := fmt.Sprintf(`{"success":false,"message":"%s"}`, message)
+				Conn.StopRequest(200, response, headers)
+			}
+			return
+		}
+		if path == "/__wx_channels_api/download_cover" {
+			var data CoverDownloadRequest
+			request_body := Conn.GetRequestBody()
+			err := json.Unmarshal(request_body, &data)
+			if err != nil {
+				headers := http.Header{}
+				headers.Set("Content-Type", "application/json")
+				Conn.StopRequest(400, `{"error":"解析请求失败"}`, headers)
+				return
+			}
+			
+			// 处理封面下载
+			success, message := handleCoverDownload(data)
+			
+			headers := http.Header{}
+			headers.Set("Content-Type", "application/json")
+			if success {
+				response := fmt.Sprintf(`{"success":true,"message":"%s"}`, message)
+				Conn.StopRequest(200, response, headers)
+			} else {
 				response := fmt.Sprintf(`{"success":false,"message":"%s"}`, message)
 				Conn.StopRequest(200, response, headers)
 			}

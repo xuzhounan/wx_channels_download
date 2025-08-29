@@ -40,7 +40,7 @@ type CSVManager struct {
 
 // NewCSVManager 创建CSV管理器
 func NewCSVManager(downloadDir string) *CSVManager {
-	csvPath := filepath.Join(downloadDir, "video_records.csv")
+	csvPath := filepath.Join(downloadDir, "video_metadata.csv")
 	return &CSVManager{
 		filePath: csvPath,
 	}

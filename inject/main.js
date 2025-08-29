@@ -146,6 +146,8 @@ function __wx_auto_download(profile) {
   
   __wx_log({ msg: "[FRONTEND] 准备发送auto_download请求" });
   
+  // 封面下载已移到profile监听器中处理，这里不再重复下载
+  
   fetch("/__wx_channels_api/auto_download", {
     method: "POST",
     headers: {
@@ -192,6 +194,39 @@ function __wx_auto_download(profile) {
       });
     });
 }
+
+async function __wx_auto_download_cover(profile, filename) {
+  try {
+    const coverData = {
+      coverUrl: profile.coverUrl,
+      filename: filename,
+      nickname: profile.nickname || "未知用户",
+      title: profile.title || filename
+    };
+    
+    __wx_log({ msg: `[自动下载] 开始下载封面: ${profile.coverUrl}` });
+    
+    const response = await fetch("/__wx_channels_api/download_cover", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(coverData),
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      __wx_log({ msg: `[自动下载] 封面下载完成: ${filename}_cover.jpg` });
+    } else {
+      __wx_log({ msg: `[自动下载] 封面下载失败: ${result.message}` });
+    }
+  } catch (err) {
+    __wx_log({ msg: `[自动下载] 封面下载失败: ${err.message}` });
+    console.error("[WX_DEBUG] 封面下载失败:", err);
+  }
+}
+
 function __wx_channels_video_decrypt(t, e, p) {
   for (
     var r = new Uint8Array(t), n = 0;
@@ -426,6 +461,19 @@ ${location.href}
 ${_profile.url}
 ${_profile.key || "该视频未加密"}`,
   });
+  
+  // 调试：输出profile的coverUrl信息
+  console.log("[WX_DEBUG] _profile.coverUrl:", _profile.coverUrl);
+  __wx_log({ msg: "[调试] _profile.coverUrl: " + (_profile.coverUrl || "不存在") });
+  
+  // 如果有封面URL，也下载封面
+  if (_profile.coverUrl) {
+    __wx_log({ msg: "[手动下载] 同时下载封面: " + _profile.coverUrl });
+    __wx_auto_download_cover(_profile, filename);
+  } else {
+    __wx_log({ msg: "[手动下载] 没有封面URL，跳过封面下载" });
+  }
+  
   if (_profile.type === "picture") {
     __wx_channels_download3(_profile, filename);
     return;
@@ -965,6 +1013,26 @@ window.addEventListener('beforeunload', function() {
         
         console.log("[自动提取] 检测到新视频:", currentVideoId);
         __wx_auto_extract_interaction();
+        
+        // 在自动模式下，检查并下载封面
+        if (__wx_channels_store__.autoMode && __wx_channels_store__.profile.coverUrl) {
+          console.log("[WX_DEBUG] 准备下载封面:", __wx_channels_store__.profile.coverUrl);
+          __wx_log({ msg: "[自动下载] 检测到封面URL，开始下载封面" });
+          
+          var filename = (() => {
+            if (__wx_channels_store__.profile.title) {
+              return __wx_channels_store__.profile.title;
+            }
+            if (__wx_channels_store__.profile.id) {
+              return __wx_channels_store__.profile.id;
+            }
+            return new Date().valueOf();
+          })();
+          
+          __wx_auto_download_cover(__wx_channels_store__.profile, filename);
+        } else if (__wx_channels_store__.autoMode) {
+          __wx_log({ msg: "[自动下载] 没有封面URL，跳过封面下载" });
+        }
         
         // 在auto模式下，延迟关闭页面
         if (__wx_channels_store__.autoMode) {

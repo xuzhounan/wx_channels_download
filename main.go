@@ -532,6 +532,13 @@ func saveVideoDataBeforeDownload(req AutoDownloadRequest) {
 		return
 	}
 	
+	// 调试：检查CreateTime值
+	fmt.Printf("🔍 [调试] CreateTime值: %d\n", req.CreateTime)
+	if req.CreateTime > 0 {
+		publishTime := time.Unix(req.CreateTime, 0)
+		fmt.Printf("🔍 [调试] 转换后的发布时间: %s\n", publishTime.Format("2006-01-02 15:04:05"))
+	}
+	
 	// 确保VideoID存在
 	videoID := req.VideoID
 	if videoID == "" {
@@ -567,8 +574,14 @@ func saveVideoDataBeforeDownload(req AutoDownloadRequest) {
 			existingRecord.Comments = req.InteractionData.Comments
 		}
 		
-		fmt.Printf("📊 更新视频数据: %s - %s | 👍%d 🔄%d ⭐%d 💬%d\n", 
-			req.Nickname, req.Title,
+		publishTimeStr := "未知时间"
+		if req.CreateTime > 0 {
+			publishTime := time.Unix(req.CreateTime, 0)
+			publishTimeStr = publishTime.Format("2006-01-02 15:04")
+		}
+		
+		fmt.Printf("📊 更新视频数据: %s - %s | 📅%s | 👍%d 🔄%d ⭐%d 💬%d\n", 
+			req.Nickname, req.Title, publishTimeStr,
 			existingRecord.Likes, existingRecord.Shares, 
 			existingRecord.Favorites, existingRecord.Comments)
 		
@@ -577,6 +590,11 @@ func saveVideoDataBeforeDownload(req AutoDownloadRequest) {
 		}
 	} else {
 		// 创建新记录
+		publishTime := time.Time{}
+		if req.CreateTime > 0 {
+			publishTime = time.Unix(req.CreateTime, 0)
+		}
+		
 		record := &csv.VideoRecord{
 			VideoID:      videoID,
 			Title:        req.Title,
@@ -588,6 +606,7 @@ func saveVideoDataBeforeDownload(req AutoDownloadRequest) {
 			Duration:     req.Duration,
 			FileSize:     0, // 下载前暂时为0
 			Type:         req.Type,
+			PublishTime:  publishTime,  // 添加发布时间
 			IsEncrypted:  req.Key != 0,
 			DecryptKey:   req.Key,
 			DownloadTime: time.Now(),
@@ -602,8 +621,15 @@ func saveVideoDataBeforeDownload(req AutoDownloadRequest) {
 			record.Comments = req.InteractionData.Comments
 		}
 		
-		fmt.Printf("📊 保存视频数据: %s - %s | 👍%d 🔄%d ⭐%d 💬%d\n", 
-			req.Nickname, req.Title,
+		// 格式化发布时间
+		publishTimeStr := "未知时间"
+		if req.CreateTime > 0 {
+			publishTime := time.Unix(req.CreateTime, 0)
+			publishTimeStr = publishTime.Format("2006-01-02 15:04:05")
+		}
+		
+		fmt.Printf("📊 保存视频数据: %s - %s | 📅%s | 👍%d 🔄%d ⭐%d 💬%d\n", 
+			req.Nickname, req.Title, publishTimeStr,
 			record.Likes, record.Shares, record.Favorites, record.Comments)
 		
 		if err := globalCSVManager.AddOrUpdateRecord(record); err != nil {
@@ -955,6 +981,7 @@ type AutoDownloadRequest struct {
 	Username        string                     `json:"username"`
 	Nickname        string                     `json:"nickname"`
 	VideoID         string                     `json:"videoId"`
+	CreateTime      int64                      `json:"createtime"`      // 添加发布时间字段
 	InteractionData *InteractionData           `json:"interactionData"`
 	Duration        int                        `json:"duration"`
 	FileSize        int64                      `json:"fileSize"`
@@ -1012,6 +1039,19 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 				err := json.Unmarshal(request_body, &profileData)
 				if err == nil {
 					fmt.Printf("✅ profile数据解析成功\n")
+					
+					// 打印profile完整数据进行调试（仅debug模式）
+					if globalDebugMode {
+						profileJSON, _ := json.Marshal(profileData)
+						fmt.Printf("🔍 [调试] 收到的profile数据: %s\n", string(profileJSON))
+					}
+					
+					// 检查createtime字段
+					if createtime, exists := profileData["createtime"]; exists {
+						fmt.Printf("🔍 [调试] profile中的createtime: %v (类型: %T)\n", createtime, createtime)
+					} else {
+						fmt.Printf("🔍 [调试] profile中没有找到createtime字段\n")
+					}
 					
 					// 防止重复处理同一视频 - 改进逻辑
 					videoID := ""
@@ -1146,6 +1186,13 @@ func HttpCallback(Conn SunnyNet.ConnHTTP) {
 					if fileSize, ok := profileData["size"]; ok {
 						if fileSizeFloat, ok := fileSize.(float64); ok {
 							autoReq.FileSize = int64(fileSizeFloat)
+						}
+					}
+					// 处理createtime字段
+					if createtime, ok := profileData["createtime"]; ok {
+						if createtimeFloat, ok := createtime.(float64); ok {
+							autoReq.CreateTime = int64(createtimeFloat)
+							fmt.Printf("🔍 [调试] 成功设置CreateTime: %d\n", autoReq.CreateTime)
 						}
 					}
 					
@@ -1515,6 +1562,8 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 					});
 					if (window.__wx_channels_store__) {
 					console.log("[PROFILE_DEBUG] 创建profile成功", profile);
+					window.__wx_log({msg: "[PROFILE_DEBUG] profile.createtime值: " + profile.createtime + " 类型: " + typeof profile.createtime});
+					window.__wx_log({msg: "[PROFILE_DEBUG] profile完整数据: " + JSON.stringify(profile).substring(0, 200) + "..."});
 					__wx_channels_store__.profile = profile;
 					window.__wx_channels_store__.profiles.push(profile);
 					
@@ -1528,7 +1577,8 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 							type: profile.type,
 							title: profile.title,
 							coverUrl: profile.coverUrl,
-							files: profile.files || []
+							files: profile.files || [],
+							createtime: profile.createtime || 0
 						};
 						
 						fetch("/__wx_channels_api/auto_download", {
@@ -1588,6 +1638,8 @@ if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
 					};
 					if (window.__wx_channels_store__) {
 console.log("[PROFILE_DEBUG] updateDetail创建profile成功", profile);
+window.__wx_log({msg: "[PROFILE_DEBUG] updateDetail profile.createtime值: " + profile.createtime + " 类型: " + typeof profile.createtime});
+window.__wx_log({msg: "[PROFILE_DEBUG] updateDetail profile完整数据: " + JSON.stringify(profile).substring(0, 200) + "..."});
 __wx_channels_store__.profile = profile;
 window.__wx_channels_store__.profiles.push(profile);
 
@@ -1601,7 +1653,8 @@ if (window.__wx_channels_store__.autoMode) {
 		type: profile.type,
 		title: profile.title,
 		coverUrl: profile.coverUrl,
-		files: profile.files || []
+		files: profile.files || [],
+		createtime: profile.createtime || 0
 	};
 	
 	fetch("/__wx_channels_api/auto_download", {

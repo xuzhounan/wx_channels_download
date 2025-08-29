@@ -109,6 +109,8 @@ __wx_log({ msg: "[FRONTEND] Store对象已暴露到window" });
 
 function __wx_auto_download(profile) {
   console.log("[WX_DEBUG] __wx_auto_download调用，autoMode:", __wx_channels_store__.autoMode);
+  console.log("[WX_DEBUG] profile完整数据:", JSON.stringify(profile, null, 2));
+  console.log("[WX_DEBUG] profile.createtime值:", profile.createtime, "类型:", typeof profile.createtime);
   __wx_log({ msg: "[FRONTEND] __wx_auto_download函数开始执行" });
   
   if (!__wx_channels_store__.autoMode) {
@@ -138,6 +140,7 @@ function __wx_auto_download(profile) {
     username: profile.username,
     nickname: profile.nickname,
     duration: profile.duration,
+    createtime: profile.createtime || 0,
     interactionData: profile.interactionData || null
   };
   
@@ -935,10 +938,19 @@ window.addEventListener('beforeunload', function() {
       }
     
     if (__wx_channels_store__.profile) {
+      // 格式化发布时间
+      let publishTimeStr = '未知时间';
+      if (__wx_channels_store__.profile.createtime) {
+        const publishTime = new Date(__wx_channels_store__.profile.createtime * 1000);
+        publishTimeStr = publishTime.toLocaleString('zh-CN');
+      }
+      
       console.log("[WX_DEBUG] Profile详情:", {
         id: __wx_channels_store__.profile.id,
         title: __wx_channels_store__.profile.title,
         url: __wx_channels_store__.profile.url,
+        publishTime: publishTimeStr,
+        createtime: __wx_channels_store__.profile.createtime,
         source: __wx_channels_store__.profile.source || 'original'
       });
     }

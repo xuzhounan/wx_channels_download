@@ -22,6 +22,7 @@ type VideoRecord struct {
 	Duration     int       `csv:"duration_ms"`
 	FileSize     int64     `csv:"file_size_bytes"`
 	Type         string    `csv:"type"`
+	PublishTime  time.Time `csv:"publish_time"`      // 添加发布时间字段
 	Likes        int       `csv:"likes"`
 	Shares       int       `csv:"shares"`
 	Favorites    int       `csv:"favorites"`
@@ -58,6 +59,7 @@ func (cm *CSVManager) getHeaders() []string {
 		"duration_ms",
 		"file_size_bytes",
 		"type",
+		"publish_time",        // 添加发布时间列
 		"likes",
 		"shares", 
 		"favorites",
@@ -82,6 +84,7 @@ func (cm *CSVManager) recordToRow(record *VideoRecord) []string {
 		strconv.Itoa(record.Duration),
 		strconv.FormatInt(record.FileSize, 10),
 		record.Type,
+		record.PublishTime.Format("2006-01-02 15:04:05"),  // 添加发布时间
 		strconv.Itoa(record.Likes),
 		strconv.Itoa(record.Shares),
 		strconv.Itoa(record.Favorites),
@@ -95,20 +98,27 @@ func (cm *CSVManager) recordToRow(record *VideoRecord) []string {
 
 // rowToRecord 将CSV行转换为记录
 func (cm *CSVManager) rowToRecord(row []string) (*VideoRecord, error) {
-	if len(row) < 18 {
+	if len(row) < 19 {
 		return nil, fmt.Errorf("invalid row length: %d", len(row))
 	}
 
 	duration, _ := strconv.Atoi(row[7])
 	fileSize, _ := strconv.ParseInt(row[8], 10, 64)
-	likes, _ := strconv.Atoi(row[10])
-	shares, _ := strconv.Atoi(row[11])
-	favorites, _ := strconv.Atoi(row[12])
-	comments, _ := strconv.Atoi(row[13])
-	isEncrypted, _ := strconv.ParseBool(row[14])
-	decryptKey, _ := strconv.Atoi(row[15])
 	
-	downloadTime, err := time.Parse("2006-01-02 15:04:05", row[16])
+	// 解析发布时间
+	publishTime, err := time.Parse("2006-01-02 15:04:05", row[10])
+	if err != nil {
+		publishTime = time.Time{} // 默认零时间
+	}
+	
+	likes, _ := strconv.Atoi(row[11])
+	shares, _ := strconv.Atoi(row[12])
+	favorites, _ := strconv.Atoi(row[13])
+	comments, _ := strconv.Atoi(row[14])
+	isEncrypted, _ := strconv.ParseBool(row[15])
+	decryptKey, _ := strconv.Atoi(row[16])
+	
+	downloadTime, err := time.Parse("2006-01-02 15:04:05", row[17])
 	if err != nil {
 		downloadTime = time.Now()
 	}
@@ -124,6 +134,7 @@ func (cm *CSVManager) rowToRecord(row []string) (*VideoRecord, error) {
 		Duration:     duration,
 		FileSize:     fileSize,
 		Type:         row[9],
+		PublishTime:  publishTime,  // 添加发布时间字段
 		Likes:        likes,
 		Shares:       shares,
 		Favorites:    favorites,
@@ -131,7 +142,7 @@ func (cm *CSVManager) rowToRecord(row []string) (*VideoRecord, error) {
 		IsEncrypted:  isEncrypted,
 		DecryptKey:   decryptKey,
 		DownloadTime: downloadTime,
-		FilePath:     row[17],
+		FilePath:     row[18],  // 调整索引
 	}, nil
 }
 

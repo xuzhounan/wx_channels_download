@@ -1041,9 +1041,9 @@ window.addEventListener('beforeunload', function() {
                   console.log("关闭页面失败:", e);
                   window.location.href = "about:blank";
                 }
-              }, 1000);
-            }, 2000); // 额外等待2秒确保数据处理完成
-          }, 8000); // 增加到8秒，给数据处理更多时间
+              }, 500);
+            }, 500); // 额外等待500毫秒确保数据处理完成
+          }, 1000); // 调整为1秒，给数据处理时间
         }
         
         // 延迟重置处理标志，防止过快重复处理

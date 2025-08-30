@@ -702,11 +702,39 @@ function __wx_parse_number_with_unit(text) {
   
   console.log("[WX_DEBUG] 定义__wx_extract_interaction_data函数");
 
-// 修复的互动数据提取
+// 修复的互动数据提取 - 增强版
 function __wx_extract_interaction_data() {
   const data = { likes: null, shares: null, favorites: null, comments: null };
   
-  // 查找页面底部的互动数字（支持单位）
+  console.log("[WX_DEBUG] 开始提取互动数据...");
+  
+  // 策略1: 查找具有特定类名的互动数据元素
+  try {
+    const interactionSelectors = [
+      '[class*="like"]',
+      '[class*="share"]', 
+      '[class*="favorite"]',
+      '[class*="comment"]',
+      '[class*="interaction"]',
+      '[class*="operate"]',
+      '[class*="action"]'
+    ];
+    
+    for (const selector of interactionSelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
+        const text = element.textContent.trim();
+        const value = __wx_parse_number_with_unit(text);
+        if (value !== null && value >= 0) {
+          console.log(`[WX_DEBUG] 找到互动元素: ${selector} = ${text} (${value})`);
+        }
+      }
+    }
+  } catch (e) {
+    console.log("[WX_DEBUG] 策略1失败:", e);
+  }
+  
+  // 策略2: 查找页面底部的互动数字（支持单位）- 降低限制
   const foundNumbers = [];
   const walker = document.createTreeWalker(
     document.body,
@@ -714,7 +742,7 @@ function __wx_extract_interaction_data() {
     {
       acceptNode: function(node) {
         const text = node.textContent.trim();
-        // 匹配纯数字或带单位的数字
+        // 匹配纯数字或带单位的数字，包括0
         return (text.match(/^\d+$/) || text.match(/^\d+(?:\.\d+)?\s*[万kmKM]$/)) ? 
           NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
@@ -730,11 +758,11 @@ function __wx_extract_interaction_data() {
     if (value !== null && parent && parent.offsetHeight > 0 && parent.offsetWidth > 0) {
       const position = parent.getBoundingClientRect();
       
-      // 放宽数值范围，包括0和小数值
-      if (position.top > window.innerHeight * 0.3 && 
+      // 进一步放宽限制条件
+      if (position.top > window.innerHeight * 0.2 && // 降低到20%
           value >= 0 && value < 100000000 && 
-          position.width < 300 && 
-          position.height < 150) {
+          position.width < 500 && // 增大宽度限制
+          position.height < 200) { // 增大高度限制
         foundNumbers.push({
           value: value,
           element: parent,
@@ -746,25 +774,27 @@ function __wx_extract_interaction_data() {
     }
   }
   
-  if (foundNumbers.length >= 4) {
-    // 按Y坐标分组，找到同一行的数字
+  console.log(`[WX_DEBUG] 找到 ${foundNumbers.length} 个候选数字:`, foundNumbers.map(n => n.text));
+  
+  // 策略3: 多种匹配方式
+  let matched = false;
+  
+  // 尝试匹配4个数字的行
+  if (!matched && foundNumbers.length >= 4) {
     const rows = {};
     foundNumbers.forEach(num => {
-      const rowKey = Math.round(num.position.top / 30) * 30; // 增大容差到30px
+      const rowKey = Math.round(num.position.top / 40) * 40; // 增大容差到40px
       if (!rows[rowKey]) rows[rowKey] = [];
       rows[rowKey].push(num);
     });
     
-    // 找到包含4个或更多数字的行
     const validRows = Object.values(rows).filter(row => row.length >= 4);
     
     if (validRows.length > 0) {
-      // 选择最底部的行（互动数据通常在底部）
       const bottomRow = validRows.reduce((max, current) => 
         current[0].position.top > max[0].position.top ? current : max
       );
       
-      // 按从左到右排序
       bottomRow.sort((a, b) => a.position.left - b.position.left);
       
       if (bottomRow.length >= 4) {
@@ -772,22 +802,22 @@ function __wx_extract_interaction_data() {
         data.shares = bottomRow[1].value;
         data.favorites = bottomRow[2].value;  
         data.comments = bottomRow[3].value;
+        matched = true;
+        console.log("[WX_DEBUG] 4数字匹配成功:", data);
       }
     }
   }
   
-  // 备用策略：如果主策略失败，尝试更宽松的匹配
-  const validData = Object.keys(data).filter(key => data[key] !== null && data[key] >= 0);
-  if (validData.length < 3 && foundNumbers.length >= 3) {
-    // 按Y坐标分组，但降低要求
+  // 尝试匹配3个数字的行（可能没有收藏功能）
+  if (!matched && foundNumbers.length >= 3) {
     const rows = {};
     foundNumbers.forEach(num => {
-      const rowKey = Math.round(num.position.top / 50) * 50; // 更大容差
+      const rowKey = Math.round(num.position.top / 60) * 60; // 更大容差
       if (!rows[rowKey]) rows[rowKey] = [];
       rows[rowKey].push(num);
     });
     
-    const validRows = Object.values(rows).filter(row => row.length >= 3); // 降低要求到3个数字
+    const validRows = Object.values(rows).filter(row => row.length >= 3);
     
     if (validRows.length > 0) {
       const bottomRow = validRows.reduce((max, current) => 
@@ -796,25 +826,52 @@ function __wx_extract_interaction_data() {
       
       bottomRow.sort((a, b) => a.position.left - b.position.left);
       
-      // 根据实际数量分配
       if (bottomRow.length >= 3) {
         data.likes = bottomRow[0].value;
         data.shares = bottomRow[1].value;
         data.comments = bottomRow[2].value;
-        if (bottomRow.length >= 4) {
-          data.favorites = bottomRow[2].value;
-          data.comments = bottomRow[3].value;
-        }
+        matched = true;
+        console.log("[WX_DEBUG] 3数字匹配成功:", data);
       }
     }
   }
   
+  // 策略4: 如果还是没有匹配，尝试匹配最底部的任意数量数字
+  if (!matched && foundNumbers.length >= 2) {
+    // 找到最底部的数字们
+    const maxTop = Math.max(...foundNumbers.map(n => n.position.top));
+    const bottomNumbers = foundNumbers.filter(n => Math.abs(n.position.top - maxTop) < 100);
+    
+    if (bottomNumbers.length >= 2) {
+      bottomNumbers.sort((a, b) => a.position.left - b.position.left);
+      
+      // 至少分配点赞和评论
+      data.likes = bottomNumbers[0].value;
+      if (bottomNumbers.length >= 2) {
+        data.comments = bottomNumbers[bottomNumbers.length - 1].value; // 评论通常在最后
+      }
+      if (bottomNumbers.length >= 3) {
+        data.shares = bottomNumbers[1].value;
+      }
+      if (bottomNumbers.length >= 4) {
+        data.favorites = bottomNumbers[2].value;
+        data.comments = bottomNumbers[3].value;
+      }
+      matched = true;
+      console.log("[WX_DEBUG] 底部数字匹配成功:", data);
+    }
+  }
+  
+  console.log("[WX_DEBUG] 最终提取结果:", data);
   return data;
 }
 
   console.log("[WX_DEBUG] __wx_extract_interaction_data函数定义完成");
 
 function __wx_manual_extract_interaction() {
+  console.log("[WX_DEBUG] 手动提取互动数据");
+  __wx_log({ msg: "🔍 开始手动提取互动数据..." });
+  
   const data = __wx_extract_interaction_data();
   
   const validData = Object.keys(data).filter(key => data[key] !== null && data[key] >= 0);
@@ -823,11 +880,11 @@ function __wx_manual_extract_interaction() {
     const icons = { likes: '👍', shares: '🔄', favorites: '⭐', comments: '💬' };
     const summary = validData.map(key => `${icons[key]}${data[key]}`).join(' ');
     __wx_log({
-      msg: `📊 ${summary}`
+      msg: `📊 手动提取成功: ${summary}`
     });
   } else {
     __wx_log({
-      msg: `📊 未找到互动数据`
+      msg: `📊 手动提取失败: 未找到互动数据`
     });
   }
   
@@ -844,21 +901,29 @@ function __wx_manual_extract_interaction() {
         ...__wx_channels_store__.profile,
         interactionData: data
       })
+    }).then(response => {
+      __wx_log({ msg: "📡 互动数据已发送到后端" });
+    }).catch(error => {
+      __wx_log({ msg: "❌ 发送到后端失败: " + error.message });
     });
   }
   
   return data;
 }
 
-// 自动提取互动数据的集成功能
+// 添加全局函数，方便在控制台调用
+window.__wx_manual_extract_interaction = __wx_manual_extract_interaction;
+
+// 自动提取互动数据的集成功能 - 增强版
 function __wx_auto_extract_interaction() {
-  // 延迟更长时间确保互动数据已经加载到DOM中
+  // 第一次尝试 - 较短延迟
   setTimeout(() => {
+    console.log("[WX_DEBUG] 第一次尝试提取互动数据");
     if (__wx_channels_store__.profile && !__wx_channels_store__.profile.interactionData) {
       const interactionData = __wx_extract_interaction_data();
       const validData = Object.keys(interactionData).filter(key => interactionData[key] !== null && interactionData[key] >= 0);
       
-      if (validData.length >= 2) {
+      if (validData.length >= 1) { // 降低成功门槛，至少有一个数据就算成功
         __wx_channels_store__.profile.interactionData = interactionData;
         
         // 简洁的输出
@@ -879,17 +944,57 @@ function __wx_auto_extract_interaction() {
             interactionData: interactionData
           })
         });
-      } else {
-        // 如果还是没有足够的互动数据，再尝试一次
-        setTimeout(() => {
-          const retryData = __wx_extract_interaction_data();
-          const retryValid = Object.keys(retryData).filter(key => retryData[key] !== null && retryData[key] >= 0);
+        return; // 成功后直接返回
+      }
+    }
+    
+    // 第二次尝试 - 中等延迟
+    setTimeout(() => {
+      console.log("[WX_DEBUG] 第二次尝试提取互动数据");
+      if (__wx_channels_store__.profile && (!__wx_channels_store__.profile.interactionData || 
+          Object.keys(__wx_channels_store__.profile.interactionData).filter(key => __wx_channels_store__.profile.interactionData[key] !== null).length === 0)) {
+        
+        const retryData = __wx_extract_interaction_data();
+        const retryValid = Object.keys(retryData).filter(key => retryData[key] !== null && retryData[key] >= 0);
+        
+        if (retryValid.length >= 1) {
+          __wx_channels_store__.profile.interactionData = retryData;
           
-          if (retryValid.length >= 2) {
-            __wx_channels_store__.profile.interactionData = retryData;
+          const icons = { likes: '👍', shares: '🔄', favorites: '⭐', comments: '💬' };
+          const summary = retryValid.map(key => `${icons[key]}${retryData[key]}`).join(' ');
+          __wx_log({
+            msg: `📊 ${summary}`
+          });
+          
+          // 发送到后端
+          fetch("/__wx_channels_api/profile", {
+            method: "POST", 
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              ...__wx_channels_store__.profile,
+              interactionData: retryData
+            })
+          });
+          return;
+        }
+      }
+      
+      // 第三次尝试 - 最长延迟，最后的尝试
+      setTimeout(() => {
+        console.log("[WX_DEBUG] 第三次尝试提取互动数据");
+        if (__wx_channels_store__.profile && (!__wx_channels_store__.profile.interactionData || 
+            Object.keys(__wx_channels_store__.profile.interactionData).filter(key => __wx_channels_store__.profile.interactionData[key] !== null).length === 0)) {
+          
+          const finalData = __wx_extract_interaction_data();
+          const finalValid = Object.keys(finalData).filter(key => finalData[key] !== null && finalData[key] >= 0);
+          
+          if (finalValid.length >= 1) {
+            __wx_channels_store__.profile.interactionData = finalData;
             
             const icons = { likes: '👍', shares: '🔄', favorites: '⭐', comments: '💬' };
-            const summary = retryValid.map(key => `${icons[key]}${retryData[key]}`).join(' ');
+            const summary = finalValid.map(key => `${icons[key]}${finalData[key]}`).join(' ');
             __wx_log({
               msg: `📊 ${summary}`
             });
@@ -902,14 +1007,20 @@ function __wx_auto_extract_interaction() {
               },
               body: JSON.stringify({
                 ...__wx_channels_store__.profile,
-                interactionData: retryData
+                interactionData: finalData
               })
             });
+          } else {
+            // 最后尝试失败，输出调试信息
+            __wx_log({
+              msg: `📊 未能提取到互动数据`
+            });
+            console.log("[WX_DEBUG] 所有提取尝试均失败，页面可能没有互动数据");
           }
-        }, 2000);
-      }
-    }
-  }, 1500);
+        }
+      }, 4000); // 4秒后最后尝试
+    }, 2500); // 2.5秒后第二次尝试
+  }, 1000); // 1秒后第一次尝试
 }
 
 // 监听profile变化，自动提取互动数据

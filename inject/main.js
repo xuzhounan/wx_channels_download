@@ -136,13 +136,22 @@ function __wx_auto_download(profile) {
     title: profile.title,
     coverUrl: profile.coverUrl,
     files: profile.files || [],
-    videoId: profile.id,
+    videoId: profile.id,     // 保持小写d，前端使用
+    VideoID: profile.id,     // 添加大写D，后端使用
     username: profile.username,
     nickname: profile.nickname,
     duration: profile.duration,
     createtime: profile.createtime || 0,
     interactionData: profile.interactionData || null
   };
+  
+  // 调试：输出VideoID信息
+  console.log("[WX_DEBUG] auto_download数据:", {
+    videoId: downloadData.videoId,
+    VideoID: downloadData.VideoID,
+    title: downloadData.title,
+    filename: downloadData.filename
+  });
   
   __wx_log({ msg: "[FRONTEND] 准备发送auto_download请求" });
   
@@ -201,7 +210,8 @@ async function __wx_auto_download_cover(profile, filename) {
       coverUrl: profile.coverUrl,
       filename: filename,
       nickname: profile.nickname || "未知用户",
-      title: profile.title || filename
+      title: profile.title || filename,
+      videoId: profile.id || ""  // 添加videoId字段
     };
     
     __wx_log({ msg: `[自动下载] 开始下载封面: ${profile.coverUrl}` });
@@ -1115,14 +1125,22 @@ window.addEventListener('beforeunload', function() {
     }
     
     if (__wx_channels_store__.profile && !profileProcessing) {
-      const currentVideoId = __wx_channels_store__.profile.id || __wx_channels_store__.profile.title;
-      console.log("[WX_DEBUG] 检查Profile:", currentVideoId);
+      // 优先使用视频ID，只有在ID不存在时才使用标题作为fallback
+      const currentVideoId = __wx_channels_store__.profile.id;
+      const fallbackId = __wx_channels_store__.profile.title;
+      const videoIdentifier = currentVideoId || fallbackId;
       
-      if (currentVideoId && currentVideoId !== lastVideoId) {
+      console.log("[WX_DEBUG] 检查Profile - ID:", currentVideoId, "标题:", fallbackId, "使用标识:", videoIdentifier);
+      
+      if (videoIdentifier && videoIdentifier !== lastVideoId) {
         profileProcessing = true; // 设置处理标志
-        lastVideoId = currentVideoId;
+        lastVideoId = videoIdentifier;
         
-        console.log("[自动提取] 检测到新视频:", currentVideoId);
+        if (currentVideoId) {
+          console.log("[自动提取] 检测到新视频(ID):", currentVideoId);
+        } else {
+          console.log("[自动提取] 检测到新视频(标题):", fallbackId, "- 注意：使用标题作为标识符");
+        }
         __wx_auto_extract_interaction();
         
         // 在自动模式下，检查并下载封面

@@ -723,7 +723,7 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 		}
 	}
 	
-	// 生成文件名：只包含视频标题
+	// 生成文件名：包含视频标题和ID以确保唯一性
 	title := req.Title
 	if title == "" {
 		if req.VideoID != "" {
@@ -732,7 +732,18 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 			title = strconv.Itoa(int(time.Now().Unix()))
 		}
 	}
-	filename := util.SafeFilename(title)
+	
+	// 生成唯一文件名：如果有VideoID，在标题后添加ID后缀
+	var filename string
+	if req.VideoID != "" && req.VideoID != title {
+		// 标题存在且与VideoID不同时，组合使用
+		filename = util.SafeFilename(title + "_" + req.VideoID)
+		fmt.Printf("🔍 [视频文件名] 标题+ID组合: %s + %s -> %s\n", title, req.VideoID, filename)
+	} else {
+		// 标题为空或标题就是VideoID时，直接使用
+		filename = util.SafeFilename(title)
+		fmt.Printf("🔍 [视频文件名] 仅使用标题: %s -> %s\n", title, filename)
+	}
 	
 	// 检查是否已存在（重复检测）
 	var targetFile string
@@ -799,7 +810,7 @@ func handleCoverDownload(req CoverDownloadRequest) (bool, string) {
 		return false, "failed to create covers user directory"
 	}
 	
-	// 生成文件名：只包含视频标题
+	// 生成文件名：包含视频标题和ID以确保唯一性（与视频文件名保持一致）
 	title := req.Title
 	if title == "" {
 		if req.Filename != "" {
@@ -808,7 +819,18 @@ func handleCoverDownload(req CoverDownloadRequest) (bool, string) {
 			title = strconv.Itoa(int(time.Now().Unix()))
 		}
 	}
-	filename := util.SafeFilename(title)
+	
+	// 生成唯一文件名：如果有VideoID，在标题后添加ID后缀
+	var filename string
+	if req.VideoID != "" && req.VideoID != title {
+		// 标题存在且与VideoID不同时，组合使用
+		filename = util.SafeFilename(title + "_" + req.VideoID)
+		fmt.Printf("🔍 [封面文件名] 标题+ID组合: %s + %s -> %s\n", title, req.VideoID, filename)
+	} else {
+		// 标题为空或标题就是VideoID时，直接使用
+		filename = util.SafeFilename(title)
+		fmt.Printf("🔍 [封面文件名] 仅使用标题: %s -> %s\n", title, filename)
+	}
 	
 	// 检查封面文件是否已存在
 	coverFile := path.Join(coversUserDir, filename+".jpg")
@@ -1080,6 +1102,7 @@ type CoverDownloadRequest struct {
 	Filename  string `json:"filename"`
 	Nickname  string `json:"nickname"`
 	Title     string `json:"title"`
+	VideoID   string `json:"videoId"`  // 添加VideoID字段
 }
 
 func HttpCallback(Conn SunnyNet.ConnHTTP) {

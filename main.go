@@ -769,8 +769,10 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 	
 	switch req.Type {
 	case "picture":
-		downloadPictureAutoWithPath(req, filename, videosUserDir)
-		return true, "picture download completed"
+		fmt.Printf("📸 检测到图文内容，跳过下载: %s\n", filename)
+		fmt.Printf("ℹ️  图文内容不支持视频下载，仅记录基本信息到CSV\n")
+		// 跳过图文内容的下载，但仍然记录到CSV
+		return true, "picture content skipped, only recorded metadata"
 	case "media":
 		if req.Key != 0 {
 			fmt.Printf("🔐 加密视频，开始下载并解密: %s\n", filename)

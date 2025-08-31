@@ -485,7 +485,8 @@ ${_profile.key || "该视频未加密"}`,
   }
   
   if (_profile.type === "picture") {
-    __wx_channels_download3(_profile, filename);
+    __wx_log({ msg: "[手动下载] 检测到图文内容，不支持下载" });
+    alert("图文内容不支持下载，请选择视频内容");
     return;
   }
   if (!_profile.key) {
@@ -1143,24 +1144,28 @@ window.addEventListener('beforeunload', function() {
         }
         __wx_auto_extract_interaction();
         
-        // 在自动模式下，检查并下载封面
-        if (__wx_channels_store__.autoMode && __wx_channels_store__.profile.coverUrl) {
-          console.log("[WX_DEBUG] 准备下载封面:", __wx_channels_store__.profile.coverUrl);
-          __wx_log({ msg: "[自动下载] 检测到封面URL，开始下载封面" });
-          
-          var filename = (() => {
-            if (__wx_channels_store__.profile.title) {
-              return __wx_channels_store__.profile.title;
-            }
-            if (__wx_channels_store__.profile.id) {
-              return __wx_channels_store__.profile.id;
-            }
-            return new Date().valueOf();
-          })();
-          
-          __wx_auto_download_cover(__wx_channels_store__.profile, filename);
-        } else if (__wx_channels_store__.autoMode) {
-          __wx_log({ msg: "[自动下载] 没有封面URL，跳过封面下载" });
+        // 在自动模式下，检查类型和封面下载
+        if (__wx_channels_store__.autoMode) {
+          if (__wx_channels_store__.profile.type === "picture") {
+            __wx_log({ msg: "[自动下载] 检测到图文内容，跳过封面下载" });
+          } else if (__wx_channels_store__.profile.coverUrl) {
+            console.log("[WX_DEBUG] 准备下载封面:", __wx_channels_store__.profile.coverUrl);
+            __wx_log({ msg: "[自动下载] 检测到封面URL，开始下载封面" });
+            
+            var filename = (() => {
+              if (__wx_channels_store__.profile.title) {
+                return __wx_channels_store__.profile.title;
+              }
+              if (__wx_channels_store__.profile.id) {
+                return __wx_channels_store__.profile.id;
+              }
+              return new Date().valueOf();
+            })();
+            
+            __wx_auto_download_cover(__wx_channels_store__.profile, filename);
+          } else {
+            __wx_log({ msg: "[自动下载] 没有封面URL，跳过封面下载" });
+          }
         }
         
         // 在auto模式下，延迟关闭页面

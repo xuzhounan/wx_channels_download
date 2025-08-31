@@ -3,3 +3,4 @@
 dist/
 
 wx_video_download*
+/vendor

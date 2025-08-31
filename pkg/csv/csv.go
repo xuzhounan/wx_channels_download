@@ -71,19 +71,38 @@ func (cm *CSVManager) getHeaders() []string {
 	}
 }
 
+// cleanCSVField 清理CSV字段中的特殊字符
+func cleanCSVField(field string) string {
+	// 移除换行符和制表符
+	field = strings.ReplaceAll(field, "\n", " ")
+	field = strings.ReplaceAll(field, "\r", " ")
+	field = strings.ReplaceAll(field, "\t", " ")
+	// 移除双引号防止CSV解析错误
+	field = strings.ReplaceAll(field, "\"", "'")
+	// 移除逗号防止CSV字段分割错误
+	field = strings.ReplaceAll(field, ",", "，")
+	// 移除多余的空格并压缩连续空格
+	field = strings.TrimSpace(field)
+	// 压缩多个连续空格为单个空格
+	for strings.Contains(field, "  ") {
+		field = strings.ReplaceAll(field, "  ", " ")
+	}
+	return field
+}
+
 // recordToRow 将记录转换为CSV行
 func (cm *CSVManager) recordToRow(record *VideoRecord) []string {
 	return []string{
-		record.VideoID,
-		record.Title,
-		record.Filename,
-		record.Username,
-		record.Nickname,
-		record.VideoURL,
-		record.CoverURL,
+		cleanCSVField(record.VideoID),
+		cleanCSVField(record.Title),
+		cleanCSVField(record.Filename),
+		cleanCSVField(record.Username),
+		cleanCSVField(record.Nickname),
+		cleanCSVField(record.VideoURL),
+		cleanCSVField(record.CoverURL),
 		strconv.Itoa(record.Duration),
 		strconv.FormatInt(record.FileSize, 10),
-		record.Type,
+		cleanCSVField(record.Type),
 		record.PublishTime.Format("2006-01-02 15:04:05"),  // 添加发布时间
 		strconv.Itoa(record.Likes),
 		strconv.Itoa(record.Shares),
@@ -92,7 +111,7 @@ func (cm *CSVManager) recordToRow(record *VideoRecord) []string {
 		strconv.FormatBool(record.IsEncrypted),
 		strconv.Itoa(record.DecryptKey),
 		record.DownloadTime.Format("2006-01-02 15:04:05"),
-		record.FilePath,
+		cleanCSVField(record.FilePath),
 	}
 }
 

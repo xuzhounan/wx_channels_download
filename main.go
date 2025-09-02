@@ -694,6 +694,12 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 		return false, "auto mode not enabled"
 	}
 	
+	// 检查是否为图文内容，完全跳过处理
+	if req.Type == "picture" {
+		fmt.Printf("📸 检测到图文内容，完全跳过处理（不保存任何记录）\n")
+		return true, "picture content completely skipped"
+	}
+	
 	// 在下载前保存视频数据和互动数据
 	saveVideoDataBeforeDownload(req)
 	
@@ -746,13 +752,7 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 	}
 	
 	// 检查是否已存在（重复检测）
-	var targetFile string
-	switch req.Type {
-	case "picture":
-		targetFile = path.Join(videosUserDir, filename+".zip")
-	default:
-		targetFile = path.Join(videosUserDir, filename+".mp4")
-	}
+	targetFile := path.Join(videosUserDir, filename+".mp4")
 	
 	if _, err := os.Stat(targetFile); err == nil {
 		fmt.Printf("⏭️  文件已存在，跳过下载: %s\n", filename)
@@ -768,11 +768,6 @@ func handleAutoDownload(req AutoDownloadRequest) (bool, string) {
 	fmt.Printf("📁 用户目录: videos/%s/ 和 covers/%s/\n", userPrefix, userPrefix)
 	
 	switch req.Type {
-	case "picture":
-		fmt.Printf("📸 检测到图文内容，跳过下载: %s\n", filename)
-		fmt.Printf("ℹ️  图文内容不支持视频下载，仅记录基本信息到CSV\n")
-		// 跳过图文内容的下载，但仍然记录到CSV
-		return true, "picture content skipped, only recorded metadata"
 	case "media":
 		if req.Key != 0 {
 			fmt.Printf("🔐 加密视频，开始下载并解密: %s\n", filename)
